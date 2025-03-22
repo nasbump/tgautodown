@@ -3,22 +3,22 @@
 
 # TG截图
 - 下载视频
-![视频下载截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-video.png)
+![视频下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-video.png)
 
 - 下载音乐
-![音乐下载截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-audio.png)
+![音乐下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-audio.png)
 
 - 下载图片
-![图片下载截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-photos.png)
+![图片下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-photos.png)
 
 - 下载磁力链
-![磁力链下载截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-magnet.png)
+![磁力链下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-magnet.png)
 
 - 下载文档
-![文档下载截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-docs.png)
+![文档下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-docs.png)
 
 - 笔记摘抄
-![笔记摘抄截图](https://github.com/nasbump/tgautodown/blob/master/screenshots/download-note.png)
+![笔记摘抄截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-note.png)
 
 # 编译安装
 项目纯go实现，直接拉代码编译：
