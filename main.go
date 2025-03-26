@@ -15,10 +15,12 @@ import (
 )
 
 type tgAutoDownload struct {
-	token   string
-	saveDir string
-	gopeed  string
-	botApi  *tgbot.BotAPI
+	token                  string
+	saveDir                string
+	gopeed                 string
+	botSrv, botApiEndpoint string
+	debug                  bool
+	botApi                 *tgbot.BotAPI
 }
 
 var tgAD tgAutoDownload
@@ -31,12 +33,42 @@ func main() {
 }
 
 func (tg *tgAutoDownload) newBotApi() {
-	tgapi, err := tgbot.NewBotAPI(tg.token)
+	var tgapi *tgbot.BotAPI
+	var err error
+
+	tgapi, err = tgbot.NewBotAPI(tg.token)
 	if err != nil {
 		log.Panic(err)
 	}
-	tgapi.Debug = false
+	tgapi.Debug = tg.debug
+
+	// if tg.botSrv != "" {
+	// 	tgapi, err = tgbot.NewBotAPIWithAPIEndpoint(tg.token, tg.botApiEndpoint)
+	// } else {
+	// 	tgapi, err = tgbot.NewBotAPI(tg.token)
+	// }
+
+	// if err != nil {
+	// 	log.Panic(err)
+	// }
+	// tgapi.Debug = tg.debug
+
 	tg.botApi = tgapi
+
+	if tg.botSrv != "" {
+		tg.switchApiEndpoint()
+	}
+}
+
+func (tg *tgAutoDownload) switchApiEndpoint() error {
+	//resp, err := tg.botApi.Request(tgbot.LogOutConfig{})
+	//if err != nil {
+	//	return err
+	//}
+
+	//log.Printf("logOut.ok:%t, result:%s", resp.Ok, string(resp.Result))
+	tg.botApi.SetAPIEndpoint(tg.botApiEndpoint)
+	return nil
 }
 
 func (tg *tgAutoDownload) login() {
@@ -103,30 +135,30 @@ func (tg *tgAutoDownload) downloadVideo(update tgbot.Update) {
 	fileID := update.Message.Video.FileID
 	savePath := filepath.Join(tg.saveDir, "video", strconv.Itoa(update.Message.MessageID))
 
-	if err := tg.download(fileID, savePath); err != nil {
+	if dlpath, err := tg.download(fileID, savePath); err != nil {
 		tg.reply(update, "下载失败: "+err.Error())
 	} else {
-		tg.reply(update, "下载完成: "+savePath)
+		tg.reply(update, "下载完成: "+dlpath)
 	}
 }
 func (tg *tgAutoDownload) downloadAudio(update tgbot.Update) {
 	fileID := update.Message.Audio.FileID
 	savePath := filepath.Join(tg.saveDir, "audio", strconv.Itoa(update.Message.MessageID))
 
-	if err := tg.download(fileID, savePath); err != nil {
+	if dlpath, err := tg.download(fileID, savePath); err != nil {
 		tg.reply(update, "下载失败: "+err.Error())
 	} else {
-		tg.reply(update, "下载完成: "+savePath)
+		tg.reply(update, "下载完成: "+dlpath)
 	}
 }
 func (tg *tgAutoDownload) downloadDocument(update tgbot.Update) {
 	fileID := update.Message.Document.FileID
 	savePath := filepath.Join(tg.saveDir, "doc", strconv.Itoa(update.Message.MessageID))
 
-	if err := tg.download(fileID, savePath); err != nil {
+	if dlpath, err := tg.download(fileID, savePath); err != nil {
 		tg.reply(update, "下载失败: "+err.Error())
 	} else {
-		tg.reply(update, "下载完成: "+savePath)
+		tg.reply(update, "下载完成: "+dlpath)
 	}
 }
 
@@ -136,7 +168,7 @@ func (tg *tgAutoDownload) downloadPhotos(update tgbot.Update) {
 	savePath := filepath.Join(tg.saveDir, "photos", strconv.Itoa(update.Message.MessageID))
 
 	for _, photo := range update.Message.Photo {
-		if err := tg.download(photo.FileID, savePath); err != nil {
+		if _, err := tg.download(photo.FileID, savePath); err != nil {
 			fail++
 		} else {
 			succ++
@@ -163,18 +195,38 @@ func (tg *tgAutoDownload) downloadMagnet(update tgbot.Update) {
 	}
 }
 
-func (tg *tgAutoDownload) download(fileID, savePath string) error {
+func (tg *tgAutoDownload) download(fileID, savePath string) (string, error) {
+
+	if tg.botSrv != "" {
+		/*
+			如果你 运行自己的 Bot API 服务器，则 file_path 将是指向本地磁盘上文件的绝对文件路径。
+			在这种情况下，你无需再下载任何内容，因为 Bot API 服务器会在调用 getFile 时为你下载文件。
+		*/
+		return tg.downloadByBotApi(fileID)
+	}
+	return savePath, tg.downloadByDirect(fileID, savePath)
+}
+
+func (tg *tgAutoDownload) downloadByBotApi(fileID string) (string, error) {
+	fp, err := tg.botApi.GetFile(tgbot.FileConfig{FileID: fileID})
+	if err != nil {
+		return "", err
+	}
+
+	return fp.FilePath, nil
+}
+func (tg *tgAutoDownload) downloadByDirect(fileID, savePath string) error {
 	url, err := tg.botApi.GetFileDirectURL(fileID)
 	if err != nil {
 		return err
 	}
 
 	log.Println(url)
-
 	if err := createDir(savePath); err != nil {
 		return err
 	}
 
+	// todo: 每个url都只有60分钟有效时间，没下载完的话，需要重新调用getfile以获取最新链接
 	return exec.Command(tg.gopeed, "-C", "6", "-D", savePath, url).Run()
 }
 
@@ -188,7 +240,7 @@ func (tg *tgAutoDownload) writeNote(update tgbot.Update) {
 	}
 	savePath = filepath.Join(savePath, strconv.Itoa(update.Message.MessageID)+".md")
 	if err := os.WriteFile(savePath, []byte(note), 0666); err != nil {
-		tg.reply(update, "写笔记失败: "+err.Error())
+		tg.reply(update, "添加笔记失败: "+err.Error())
 	} else {
 		tg.reply(update, "添加笔记成功: "+savePath)
 	}
@@ -206,12 +258,24 @@ func (tg *tgAutoDownload) parseArgs() {
 	flag.StringVar(&tg.token, "token", "", "tg-bot-token")
 	flag.StringVar(&tg.saveDir, "dir", "./", "save dir")
 	flag.StringVar(&tg.gopeed, "gopeed", "", "gopeed path")
+	flag.BoolVar(&tg.debug, "debug", false, "enable bot-api debug")
+	flag.StringVar(&tg.botSrv, "botSrv", "", "bot-api-server: http://localhost:8081")
 	flag.Parse()
 
 	if tg.token == "" {
 		if tg.token = os.Getenv("TGBOTOKEN"); tg.token == "" {
 			log.Panic("tg-bot-token miss")
 		}
+	}
+
+	if tg.botSrv != "" {
+		tg.saveDir = filepath.Join(tg.saveDir, tg.token)
+		tg.botApiEndpoint = tg.botSrv + "/bot%s/%s"
+		//tg.botFileEndpoint = tg.botSrv + "/file/bot%s/%s"
+		log.Println("tg.botApiEndpoint", tg.botApiEndpoint)
+		//log.Println("tg.botFileEndpoint", tg.botFileEndpoint)
+		//log.Println("tgbot.APIEndpoint", tgbot.APIEndpoint)
+		//log.Println("tgbot.FileEndpoint", tgbot.FileEndpoint)
 	}
 }
 
