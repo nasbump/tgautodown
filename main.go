@@ -61,12 +61,12 @@ func (tg *tgAutoDownload) newBotApi() {
 }
 
 func (tg *tgAutoDownload) switchApiEndpoint() error {
-	//resp, err := tg.botApi.Request(tgbot.LogOutConfig{})
-	//if err != nil {
-	//	return err
-	//}
+	resp, err := tg.botApi.Request(tgbot.LogOutConfig{})
+	if err != nil {
+		return err
+	}
 
-	//log.Printf("logOut.ok:%t, result:%s", resp.Ok, string(resp.Result))
+	log.Printf("logOut.ok:%t, result:%s", resp.Ok, string(resp.Result))
 	tg.botApi.SetAPIEndpoint(tg.botApiEndpoint)
 	return nil
 }
@@ -101,29 +101,33 @@ func (tg *tgAutoDownload) poll() {
 		}
 
 		rMsg := update.Message
+		msgID := strconv.Itoa(update.Message.MessageID)
 
-		log.Printf("recv updateID: %d, msgID: %d, from: %v at %d",
-			update.UpdateID, rMsg.MessageID, rMsg.From, rMsg.Date)
+		log.Printf("recv updateID: %d, msgID: %s, from: %v at %d",
+			update.UpdateID, msgID, rMsg.From, rMsg.Date)
 
 		switch {
 		case rMsg.Video != nil:
-			go tg.downloadVideo(update)
-			tg.reply(update, "收到视频，正在下载!")
+			tg.reply(update, "正在下载视频, 消息ID: "+msgID)
+			fileID := update.Message.Video.FileID
+			go tg.download("videos", fileID, msgID, update)
 		case rMsg.Audio != nil:
-			go tg.downloadAudio(update)
-			tg.reply(update, "收到音频，正在下载!")
+			tg.reply(update, "正在下载音频, 消息ID: "+msgID)
+			fileID := update.Message.Audio.FileID
+			go tg.download("music", fileID, msgID, update)
 		case rMsg.Document != nil:
-			go tg.downloadDocument(update)
-			tg.reply(update, "收到文档，正在下载!")
+			tg.reply(update, "正在下载文档, 消息ID: "+msgID)
+			fileID := update.Message.Document.FileID
+			go tg.download("documents", fileID, msgID, update)
 		case rMsg.Photo != nil:
-			go tg.downloadPhotos(update)
-			tg.reply(update, "收到照片，正在下载!")
+			tg.reply(update, "正在下载照片, 消息ID: "+msgID)
+			go tg.downloadPhotos("photos", msgID, update)
 		case len(rMsg.Text) > 0:
 			if strings.HasPrefix(strings.ToLower(rMsg.Text), "magnet:?") {
-				go tg.downloadMagnet(update)
-				tg.reply(update, "收到磁力链接，正在下载!")
+				tg.reply(update, "正在下载BT, 消息ID: "+msgID)
+				go tg.downloadMagnet("bt", msgID, update)
 			} else {
-				tg.writeNote(update)
+				tg.writeNote("note", update)
 			}
 		default:
 			tg.reply(update, "你发的是啥啊？")
@@ -131,109 +135,111 @@ func (tg *tgAutoDownload) poll() {
 	}
 }
 
-func (tg *tgAutoDownload) downloadVideo(update tgbot.Update) {
-	fileID := update.Message.Video.FileID
-	savePath := filepath.Join(tg.saveDir, "video", strconv.Itoa(update.Message.MessageID))
-
-	if dlpath, err := tg.download(fileID, savePath); err != nil {
-		tg.reply(update, "下载失败: "+err.Error())
+func (tg *tgAutoDownload) download(dlType, fileID, msgID string, update tgbot.Update) error {
+	if fp, err := tg.doDownload(fileID, dlType); err != nil {
+		replyMsg := "下载失败:" + dlType
+		replyMsg += "\n- 消息ID: " + msgID
+		replyMsg += "\n- 失败信息: " + err.Error()
+		tg.reply(update, replyMsg)
+		return err
 	} else {
-		tg.reply(update, "下载完成: "+dlpath)
-	}
-}
-func (tg *tgAutoDownload) downloadAudio(update tgbot.Update) {
-	fileID := update.Message.Audio.FileID
-	savePath := filepath.Join(tg.saveDir, "audio", strconv.Itoa(update.Message.MessageID))
-
-	if dlpath, err := tg.download(fileID, savePath); err != nil {
-		tg.reply(update, "下载失败: "+err.Error())
-	} else {
-		tg.reply(update, "下载完成: "+dlpath)
-	}
-}
-func (tg *tgAutoDownload) downloadDocument(update tgbot.Update) {
-	fileID := update.Message.Document.FileID
-	savePath := filepath.Join(tg.saveDir, "doc", strconv.Itoa(update.Message.MessageID))
-
-	if dlpath, err := tg.download(fileID, savePath); err != nil {
-		tg.reply(update, "下载失败: "+err.Error())
-	} else {
-		tg.reply(update, "下载完成: "+dlpath)
+		replyMsg := "下载成功:" + dlType
+		replyMsg += "\n- 消息ID: " + msgID
+		replyMsg += "\n- 文件大小: " + sizeInt2Readable(fp.FileSize)
+		replyMsg += "\n- 保存路径: " + fp.FilePath
+		tg.reply(update, replyMsg)
+		return nil
 	}
 }
 
-func (tg *tgAutoDownload) downloadPhotos(update tgbot.Update) {
+func (tg *tgAutoDownload) downloadPhotos(dlType, msgID string, update tgbot.Update) {
 	succ := 0
 	fail := 0
-	savePath := filepath.Join(tg.saveDir, "photos", strconv.Itoa(update.Message.MessageID))
 
 	for _, photo := range update.Message.Photo {
-		if _, err := tg.download(photo.FileID, savePath); err != nil {
+		if _, err := tg.doDownload(photo.FileID, dlType); err != nil {
 			fail++
 		} else {
 			succ++
 		}
 	}
 
-	replyTxt := fmt.Sprintf("下载完成， 成功：%d, 失败：%d", succ, fail)
-	tg.reply(update, replyTxt)
+	replyMsg := "下载完成:" + dlType
+	replyMsg += "\n- 消息ID: " + msgID
+	replyMsg += "\n- 保存路径: " + filepath.Join(tg.saveDir, dlType)
+	replyMsg += fmt.Sprintf("\n- 成功：%d, 失败：%d", succ, fail)
+	tg.reply(update, replyMsg)
 }
-func (tg *tgAutoDownload) downloadMagnet(update tgbot.Update) {
+func (tg *tgAutoDownload) downloadMagnet(dlType, msgID string, update tgbot.Update) {
 	url := update.Message.Text
 	log.Println(url)
 
-	savePath := filepath.Join(tg.saveDir, "bt", strconv.Itoa(update.Message.MessageID))
+	savePath := filepath.Join(tg.saveDir, dlType, msgID)
 	if err := createDir(savePath); err != nil {
-		tg.reply(update, "下载失败: "+err.Error())
+		replyMsg := "BT创建失败:"
+		replyMsg += "\n- 消息ID: " + msgID
+		replyMsg += "\n- 失败信息: " + err.Error()
+		tg.reply(update, replyMsg)
 		return
 	}
 
 	if err := exec.Command(tg.gopeed, "-C", "32", "-D", savePath, url).Run(); err != nil {
-		tg.reply(update, "下载失败: "+err.Error())
+		replyMsg := "BT下载失败:"
+		replyMsg += "\n- 消息ID: " + msgID
+		replyMsg += "\n- 失败信息: " + err.Error()
+		tg.reply(update, replyMsg)
 	} else {
-		tg.reply(update, "下载完成: "+savePath)
+		tg.reply(update, "BT下载完成: "+savePath)
+
+		replyMsg := "BT下载成功:"
+		replyMsg += "\n- 消息ID: " + msgID
+		replyMsg += "\n- 保存路径: " + savePath + "/"
+		tg.reply(update, replyMsg)
 	}
 }
 
-func (tg *tgAutoDownload) download(fileID, savePath string) (string, error) {
-
+func (tg *tgAutoDownload) doDownload(fileID, dlType string) (tgbot.File, error) {
 	if tg.botSrv != "" {
 		/*
 			如果你 运行自己的 Bot API 服务器，则 file_path 将是指向本地磁盘上文件的绝对文件路径。
 			在这种情况下，你无需再下载任何内容，因为 Bot API 服务器会在调用 getFile 时为你下载文件。
 		*/
-		return tg.downloadByBotApi(fileID)
+		return tg.doDownloadByBotApi(fileID)
 	}
-	return savePath, tg.downloadByDirect(fileID, savePath)
+	return tg.doDownloadByDirect(fileID, dlType)
 }
 
-func (tg *tgAutoDownload) downloadByBotApi(fileID string) (string, error) {
+func (tg *tgAutoDownload) doDownloadByBotApi(fileID string) (tgbot.File, error) {
 	fp, err := tg.botApi.GetFile(tgbot.FileConfig{FileID: fileID})
 	if err != nil {
-		return "", err
+		return fp, err
 	}
 
-	return fp.FilePath, nil
+	return fp, nil
 }
-func (tg *tgAutoDownload) downloadByDirect(fileID, savePath string) error {
-	url, err := tg.botApi.GetFileDirectURL(fileID)
+func (tg *tgAutoDownload) doDownloadByDirect(fileID, dlType string) (tgbot.File, error) {
+	fp, err := tg.botApi.GetFile(tgbot.FileConfig{FileID: fileID})
 	if err != nil {
-		return err
+		return fp, err
 	}
 
+	url := fp.Link(tg.token)
 	log.Println(url)
+
+	savePath := filepath.Join(tg.saveDir, dlType)
 	if err := createDir(savePath); err != nil {
-		return err
+		return fp, err
 	}
 
 	// todo: 每个url都只有60分钟有效时间，没下载完的话，需要重新调用getfile以获取最新链接
-	return exec.Command(tg.gopeed, "-C", "6", "-D", savePath, url).Run()
+	fp.FilePath = filepath.Join(savePath, filepath.Base(fp.FilePath))
+	return fp, exec.Command(tg.gopeed, "-C", "6", "-D", savePath, url).Run()
 }
 
-func (tg *tgAutoDownload) writeNote(update tgbot.Update) {
+func (tg *tgAutoDownload) writeNote(dlType string, update tgbot.Update) {
 	note := update.Message.Text
 
-	savePath := filepath.Join(tg.saveDir, "note")
+	savePath := filepath.Join(tg.saveDir, dlType)
 	if err := createDir(savePath); err != nil {
 		tg.reply(update, "添加笔记失败: "+err.Error())
 		return
@@ -263,13 +269,14 @@ func (tg *tgAutoDownload) parseArgs() {
 	flag.Parse()
 
 	if tg.token == "" {
-		if tg.token = os.Getenv("TGBOTOKEN"); tg.token == "" {
+		if tg.token = os.Getenv("TGBOT_TOKEN"); tg.token == "" {
 			log.Panic("tg-bot-token miss")
 		}
 	}
 
+	tg.saveDir = filepath.Join(tg.saveDir, tg.token)
+
 	if tg.botSrv != "" {
-		tg.saveDir = filepath.Join(tg.saveDir, tg.token)
 		tg.botApiEndpoint = tg.botSrv + "/bot%s/%s"
 		//tg.botFileEndpoint = tg.botSrv + "/file/bot%s/%s"
 		log.Println("tg.botApiEndpoint", tg.botApiEndpoint)
@@ -288,4 +295,17 @@ func createDir(dir string) error {
 	}
 
 	return os.MkdirAll(dir, 0777)
+}
+
+func sizeInt2Readable(size int) string {
+	if (size >> 30) > 0 {
+		return fmt.Sprintf("%.2fGB", float64(size)/1073741824.0)
+	}
+	if (size >> 20) > 0 {
+		return fmt.Sprintf("%.2fMB", float64(size)/1048576.0)
+	}
+	if (size >> 10) > 0 {
+		return fmt.Sprintf("%.2fKB", float64(size)/1024.0)
+	}
+	return fmt.Sprintf("%d Bytes", size)
 }
