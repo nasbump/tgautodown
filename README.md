@@ -117,7 +117,6 @@ services:
       - 如果不指定，则表示使用官方bot服务
       - 如果指定了api-id, api-hash，则使用自建bot服务
       - 获取方式：https://core.telegram.org/api/obtaining_api_id⁠
-4. 如果要配置代理，则增加: HTTP_PROXY=http://XXX 及 HTTPS_PROXY=http://XXX 两个环境变量
 
 # 感谢
 - [gopeed](https://github.com/GopeedLab/gopeed)
