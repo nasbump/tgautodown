@@ -89,6 +89,7 @@ docker run -d --net host \
         -e TGBOT_TOKEN=<TG-Bot-Token> \
         -e TGBOT_API_ID=<TG-Bot-API-ID> \
         -e TGBOT_API_HASH=<TG-Bot-API-HASH> \
+        -e TGBOT_PROXY=http://<PROXY-ADDR> \
         nasbump/tgautodown:latest
 
 
@@ -105,6 +106,7 @@ services:
       - TGBOT_TOKEN=<TG-Bot-Token>
       - TGBOT_API_ID=<TG-Bot-API-ID>
       - TGBOT_API_HASH=<TG-Bot-API-HASH>
+      - TGBOT_PROXY=http://<PROXY-ADDR>
     volumes: 
       - <path-to-download-dir>:/download 
     restart: unless-stopped
@@ -119,5 +121,6 @@ services:
       - 获取方式：https://core.telegram.org/api/obtaining_api_id⁠
 
 # 感谢
-- [gopeed](https://github.com/GopeedLab/gopeed)
-- [telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api)
+- [下载：gopeed](https://github.com/GopeedLab/gopeed)
+- [gobind：telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api)
+- [支持代理的bot server：telegram-bot-api](https://github.com/nasbump/telegram-bot-api)
