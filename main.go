@@ -36,28 +36,28 @@ func (tg *tgAutoDownload) newBotApi() {
 	var tgapi *tgbot.BotAPI
 	var err error
 
-	tgapi, err = tgbot.NewBotAPI(tg.token)
-	if err != nil {
-		log.Panic(err)
+	if 1 == 0 {
+		tgapi, err = tgbot.NewBotAPI(tg.token)
+		if err != nil {
+			log.Panic("NewBotAPI", err)
+		}
+		if tg.botSrv != "" {
+			tg.switchApiEndpoint()
+		}
+	} else {
+		if tg.botSrv != "" {
+			tgapi, err = tgbot.NewBotAPIWithAPIEndpoint(tg.token, tg.botApiEndpoint)
+		} else {
+			tgapi, err = tgbot.NewBotAPI(tg.token)
+		}
+
+		if err != nil {
+			log.Panic("NewBotAPI", err)
+		}
 	}
-	tgapi.Debug = tg.debug
-
-	// if tg.botSrv != "" {
-	// 	tgapi, err = tgbot.NewBotAPIWithAPIEndpoint(tg.token, tg.botApiEndpoint)
-	// } else {
-	// 	tgapi, err = tgbot.NewBotAPI(tg.token)
-	// }
-
-	// if err != nil {
-	// 	log.Panic(err)
-	// }
-	// tgapi.Debug = tg.debug
 
 	tg.botApi = tgapi
-
-	if tg.botSrv != "" {
-		tg.switchApiEndpoint()
-	}
+	tgapi.Debug = tg.debug
 }
 
 func (tg *tgAutoDownload) switchApiEndpoint() error {
