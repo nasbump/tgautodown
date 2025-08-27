@@ -1,6 +1,12 @@
 # tgautodown
 一款用于下载TG上视频、音乐、图片、文档、磁力链的TG机器人；只需将所需的资源转发给机器人，机器人会自动完成下载，并且会在完成后回复消息通知你。
 
+### 最新版本全新升级
+- 采用全新架构，完全重写
+- 不再依赖机器人
+- 不再依赖bot-api-server
+- 支持获取视频、文档、音乐原文件名
+
 # TG截图
 - 下载视频
 ![视频下载截图](https://github.com/nasbump/tgautodown/blob/main/screenshots/download-video.png)
@@ -32,95 +38,38 @@ go build
 - 启动参数：
 ```
 $ ./tgautodown -h
-Usage of ./tgautodown:
-  -botSrv string
-        bot-api-server: http://localhost:8081
-  -debug
-        enable bot-api debug
-  -dir string
-        save dir (default "./")
-  -gopeed string
-        gopeed path
-  -token string
-        tg-bot-token
+usage: ./build/tgautodown options
+  -phone   ## 登陆TG的手机号，用于接收验证码
+  -appid   ## https://core.telegram.org/api/obtaining_api_id
+  -apphash
+  -proxy   ## socks5代理地址: 127.0.0.1:1080
+  -names   ## 频道名，支持公开频道和私有频道; 建议使用自建的私有频道，减少噪音
+  -session ./session.json  ## 会话保存文件，首次启动需要登陆，之后基于该文件不再需要登陆
+  -gopeed   ## gopeed path
+  -dir     ## 文件下载保存目录
+  -logpath
+  -logcnt 1
+  -loglev 0  ## -1 trace, 0 debug, 1 info, 2 warn, 3 error, 5 fatal, 5 panic, 6 nolevel
+  -logsize 52428800  ## MB
 ```
 
-- 参数说明:
-
-| 参数名 | 是否必须 | 说明 |
-|--------|---------|---------|
-| token | 是 | 机器人token，获取方法见下 |
-| dir | 是 | 下载保存路径 |
-| botSrv | 否 | 是否使用自建bot服务，注意：使用官方bot服务时无法下载超过50M的文件 |
-| gopeed | 否 | 下载器，使用自建bot服务时可以不传该参数，使用官方bot服务时建议传，否则无法下载，只能记笔记摘要 |
-| debug | 否| 用于打印调试日志 |
-
-- token获取方法：
-1. 在TG中搜索“BotFather”，然后点击“开始”与其进行对话。
-2. 在与BotFather的对话中，输入“/newbot”并按照提示操作。我们需要为机器人取一个独特的名称和用户名（用户名必须以bot结尾）。
-3. 不出意外的话，此时就会得到一个机器人Token。(注意：包含数字冒号字母一整串)
-
-- 下载器的编译：[gopeed](https://github.com/GopeedLab/gopeed) 下载器
-```
-go install github.com/GopeedLab/gopeed/cmd/gopeed@latest
-```
 
 ### 启动示例：
-- 使用官方botSrv：
 ```
-./tgautodown -token 123456789:AAABBBCCCDDDEEFF -gopeed /usr/bin/gopeed -dir /data/data/files
-```
-- 使用自建botSrv：
-```
-./tgautodown -token 123456789:AAABBBCCCDDDEEFF -gopeed /usr/bin/gopeed -dir /data/data/files -botSrv http://localhost:8081
+./build/tgautodown \
+  -proxy 192.168.1.7:7891 \
+  -phone +13057359985 \
+  -appid 16103380 -apphash bdd26eb6a54fb59d75d9b2c47ee6eee7 \
+  -session ./data/session.json \
+  -names +AjbQIYhiKlhhNzMx  
 ```
 
 ### 下载保存路径：
 视频、音乐、文档、图片、磁力链、笔记分别保存在`videos`,`music`,`documents`,`photos`,`bt`,`note`目录下。
 
-
-# Docker安装
-我已将编译好的 `tgautodown`,`gopeed`,以及`botSrv`都打成docker镜像并上传到了 [dockerhub](https://hub.docker.com/r/nasbump/tgautodown)
-- docker run：
-```
-docker run -d --net host \
-        --name tgautodown \
-        -v <path-to-download-dir>:/download \
-        -e TGBOT_TOKEN=<TG-Bot-Token> \
-        -e TGBOT_API_ID=<TG-Bot-API-ID> \
-        -e TGBOT_API_HASH=<TG-Bot-API-HASH> \
-        -e TGBOT_PROXY=http://<PROXY-ADDR> \
-        nasbump/tgautodown:latest
-
-
-```
-
-- docker compose:
-```
-services: 
-  tgautodown: 
-    image: nasbump/tgautodown:latest  
-    container_name: tgautodown 
-    network_mode: host 
-    environment: 
-      - TGBOT_TOKEN=<TG-Bot-Token>
-      - TGBOT_API_ID=<TG-Bot-API-ID>
-      - TGBOT_API_HASH=<TG-Bot-API-HASH>
-      - TGBOT_PROXY=http://<PROXY-ADDR>
-    volumes: 
-      - <path-to-download-dir>:/download 
-    restart: unless-stopped
-```
-
-- 参数说明
-1. path-to-download-dir: 替换为自己的下载目录
-2. TG-Bot-Token： 替换为自己TG机器人的token
-3. TG-Bot-API-ID，TG-Bot-API-HASH：
-      - 如果不指定，则表示使用官方bot服务
-      - 如果指定了api-id, api-hash，则使用自建bot服务
-      - 获取方式：https://core.telegram.org/api/obtaining_api_id⁠
+- 其他
+1. appid和apphash获取：https://core.telegram.org/api/obtaining_api_id
 
 # 感谢
+- [基于MTProto协议的TG库](github.com/gotd/td/tg)
 - [下载：gopeed](https://github.com/GopeedLab/gopeed)
-- [gobind：telegram-bot-api](https://github.com/go-telegram-bot-api/telegram-bot-api)
-- [支持代理的bot server：telegram-bot-api](https://github.com/nasbump/telegram-bot-api)
