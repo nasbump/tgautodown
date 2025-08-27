@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TG登陆系统</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>TG登陆系统</h1>
+        </header>
+
+        <main class="main-content">
+            <div id="status-container" class="status-container">
+                <div class="loading">正在检查登录状态...</div>
+            </div>
+
+            <div id="login-form" class="login-form hidden">
+                <h2>登录Telegram账号</h2>
+                <form id="user-form">
+                    <div class="form-group">
+                        <label for="appid">App ID:</label>
+                        <input type="number" id="appid" name="appid" required placeholder="请输入App ID">
+                    </div>
+                    <div class="form-group">
+                        <label for="apphash">App Hash:</label>
+                        <input type="text" id="apphash" name="apphash" required placeholder="请输入App Hash">
+                    </div>
+                    <div class="form-group">
+                        <label for="phone">手机号码:</label>
+                        <input type="tel" id="phone" name="phone" required placeholder="+861234567890 (必须带区号，如 +86)">
+                    </div>
+                    <button type="submit" class="btn btn-primary">提交登录信息</button>
+                </form>
+            </div>
+
+            <div id="code-form" class="code-form hidden">
+                <h2>输入验证码</h2>
+                <form id="code-submit-form">
+                    <div class="form-group">
+                        <label for="code">验证码:</label>
+                        <input type="text" id="code" name="code" required placeholder="请输入收到的验证码">
+                    </div>
+                    <button type="submit" class="btn btn-primary">提交验证码</button>
+                </form>
+            </div>
+
+            <div id="success-container" class="success-container hidden">
+                <div class="success-message">
+                    <h2>🎉 登录成功！</h2>
+                    <p>Telegram账号已成功登录</p>
+                    <div class="user-info">
+                        <h3>用户信息</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <span class="info-label">App ID:</span>
+                                <span id="user-appid" class="info-value">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">App Hash:</span>
+                                <span id="user-apphash" class="info-value">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">手机号码:</span>
+                                <span id="user-phone" class="info-value">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">First Name:</span>
+                                <span id="user-firstname" class="info-value">-</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Username:</span>
+                                <span id="user-username" class="info-value">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error-container" class="error-container hidden">
+                <div class="error-message">
+                    <h2>❌ 发生错误</h2>
+                    <p id="error-text"></p>
+                    <button class="btn btn-secondary" onclick="checkStatus()">重试</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

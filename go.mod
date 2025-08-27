@@ -4,6 +4,7 @@ go 1.23.4
 
 require (
 	github.com/gotd/td v0.130.0
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/rs/zerolog v1.34.0
 	golang.org/x/net v0.42.0
 )

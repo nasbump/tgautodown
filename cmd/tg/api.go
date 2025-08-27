@@ -19,6 +19,13 @@ import (
 	"github.com/gotd/td/tg"
 )
 
+const (
+	TgstatusInit int = iota
+	TgstatusLoging
+	TgstatusLogOk
+	TgstatusLogFail
+)
+
 var (
 	ErrMsgClsUnsupport = errors.New("msgcls unsupport")
 	ErrNoLoginCodeHnd  = errors.New("no login code handle")
@@ -33,16 +40,18 @@ type SubChannelInfo struct {
 }
 
 type TgSuber struct {
-	AppID         int
-	AppHash       string
-	Phone         string
-	SessionPath   string
-	Socks5Proxy   string
-	GetHistoryCnt int
+	AppID               int
+	AppHash             string
+	Phone               string
+	SessionPath         string
+	Socks5Proxy         string
+	FirstName, UserName string
+	GetHistoryCnt       int
 
 	client       *telegram.Client
 	getLoginCode TgLoginCodeHnd
 	mhnds        map[TgMsgClass]TgMsgHnd
+	status       int
 }
 
 type TgMsgClass string
@@ -75,6 +84,7 @@ func NewTG(appid int, apphash, phone string) *TgSuber {
 		AppHash: apphash,
 		Phone:   phone,
 		mhnds:   map[TgMsgClass]TgMsgHnd{},
+		status:  TgstatusInit,
 	}
 	return ts
 }
@@ -100,7 +110,7 @@ func (ts *TgSuber) WithMsgHandle(mcls TgMsgClass, hnd TgMsgHnd) *TgSuber {
 }
 
 func (ts *TgSuber) Run(names []string) error {
-	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("socks5", ts.Socks5Proxy).Strs("channel", names).Send()
+	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("phone", ts.Phone).Str("socks5", ts.Socks5Proxy).Strs("channel", names).Send()
 
 	// zlog, _ := zap.NewDevelopmentConfig().Build()
 
@@ -186,4 +196,8 @@ func sanitizeFileName(name string) string {
 		name = fmt.Sprintf("file_%d", time.Now().Unix())
 	}
 	return name
+}
+
+func (ts *TgSuber) Status() int {
+	return ts.status
 }

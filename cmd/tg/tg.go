@@ -14,16 +14,23 @@ import (
 )
 
 func (ts *TgSuber) handle(ctx context.Context, names []string) error {
+	ts.status = TgstatusLoging
 	if err := ts.login(ctx); err != nil {
+		ts.status = TgstatusLogFail
 		return err
 	}
 
 	// 获取当前用户信息，拿到 self ID
 	self, err := ts.client.Self(ctx)
 	if err != nil {
+		ts.status = TgstatusLogFail
 		logs.Warn(err).Msg("get self fail")
 		return err
 	}
+
+	ts.status = TgstatusLogOk
+	ts.FirstName = self.FirstName
+	ts.UserName = self.Username
 	logs.Info().Str("firstname", self.FirstName).Str("username", self.Username).
 		Int64("id", self.ID).Int64("accesshash", self.AccessHash).
 		Bool("bot", self.Bot).Str("phone", ts.Phone).
@@ -84,6 +91,9 @@ func (ts *TgSuber) login(ctx context.Context) error {
 
 	for {
 		code := ts.getLoginCode()
+		if code == "" {
+			continue
+		}
 
 		// 验证登录
 		if _, err := tsca.SignIn(ctx, ts.Phone, code, codeSent.PhoneCodeHash); err != nil {
