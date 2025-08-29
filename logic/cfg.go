@@ -2,6 +2,7 @@ package logic
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"tgautodown/internal/logs"
@@ -9,53 +10,60 @@ import (
 )
 
 type TgLogicConfig struct {
-	AppID        int      `json:"appid"`
-	AppHash      string   `json:"apphash"`
-	Phone        string   `json:"phone"`
-	Socks5       string   `json:"proxy"`
-	ChannelNames []string `json:"names,omitempty"`
-	CfgDir       string   `json:"cfgdir"`
-	SaveDir      string   `json:"saveDir"`
-	Gopeed       string   `json:"gopeed,omitempty"`
-	HttpAddr     string   `json:"httpaddr"`
-	LogPath      string   `json:"logpath,omitempty"`
-	LogLev       int      `json:"loglev,omitempty"`
-	LogSize      int      `json:"logsize,omitempty"`
-	LogCnt       int      `json:"logcnt,omitempty"`
+	AppID    int    `json:"appid"`
+	AppHash  string `json:"apphash"`
+	Phone    string `json:"phone"`
+	CfgDir   string `json:"cfgdir"`
+	SaveDir  string `json:"saveDir"`
+	Gopeed   string `json:"gopeed,omitempty"`
+	HttpAddr string `json:"httpaddr"`
+	LogPath  string `json:"logpath,omitempty"`
+	LogLev   int    `json:"loglev,omitempty"`
+	LogSize  int    `json:"logsize,omitempty"`
+	LogCnt   int    `json:"logcnt,omitempty"`
 
-	cfgPath     string `json:"-"`
-	sessionPath string `json:"-"`
+	channelNames []string `json:"-"`
+	socks5       string   `json:"-"`
+	cfgPath      string   `json:"-"`
+	sessionPath  string   `json:"-"`
 }
 
 var TGCfg TgLogicConfig
 
 func ParseCfg() {
-	TGCfg.CfgDir = "./data"
-	TGCfg.SaveDir = "./"
+	TGCfg.CfgDir = "/app/data"
+	TGCfg.SaveDir = "/app/download"
+	TGCfg.Gopeed = "/app/bin/gopeed"
 	TGCfg.HttpAddr = ":2020"
 	TGCfg.LogLev = 0
 	TGCfg.LogSize = 300 << 20
 	TGCfg.LogCnt = 1
-	TGCfg.cfgPath = filepath.Join(TGCfg.CfgDir, "config.json")
-	TGCfg.sessionPath = filepath.Join(TGCfg.CfgDir, "session.json")
 
-	cfg := utils.XmArgValString("cfg", "", "./config.json")
+	TGCfg.channelNames = utils.XmArgValStrings("names", "channels name", "")
+	TGCfg.socks5 = utils.XmArgValString("proxy", "socks5://127.0.0.1:1080", "")
+
+	cfg := utils.XmArgValString("cfg", "", TGCfg.CfgDir+"/config.json")
+
 	utils.XmUsageIfHasKeys("h", "help")
 
 	file, err := os.Open(cfg)
 	if err != nil {
-		logs.Error(err).Str("cfg", cfg).Msg("open fail")
-		return
-	}
-	defer file.Close()
-
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&TGCfg); err != nil {
-		logs.Panic(err).Str("cfg", cfg).Msg("Failed to decode cfg")
+		log.Println("open", cfg, "fail")
+	} else {
+		decoder := json.NewDecoder(file)
+		if err := decoder.Decode(&TGCfg); err != nil {
+			log.Panic("load", cfg, "fail")
+		}
+		file.Close()
 	}
 
 	TGCfg.cfgPath = filepath.Join(TGCfg.CfgDir, "config.json")
 	TGCfg.sessionPath = filepath.Join(TGCfg.CfgDir, "session.json")
+
+	logs.LogsInit(TGCfg.LogPath, TGCfg.LogLev, TGCfg.LogSize, TGCfg.LogCnt)
+
+	load, _ := json.Marshal(&TGCfg)
+	logs.Info().Str("cfg", cfg).RawJSON("load", load).Send()
 }
 
 func SaveCfg() {

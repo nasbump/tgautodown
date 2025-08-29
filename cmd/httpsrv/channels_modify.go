@@ -33,7 +33,7 @@ func HandleChannelsModify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 更新频道列表
-	logic.TGCfg.ChannelNames = channels
+	// logic.TGCfg.ChannelNames = channels
 	logic.SaveCfg()
 
 	response := ChannelsModifyResponse{

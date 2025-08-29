@@ -39,18 +39,20 @@ go build
 ```
 $ ./tgautodown -h
 usage: ./build/tgautodown options
-  -phone   ## 登陆TG的手机号，用于接收验证码
-  -appid   ## https://core.telegram.org/api/obtaining_api_id
-  -apphash
+  -cfg     ## 配置文件，默认为: /app/data/config.json
   -proxy   ## socks5代理地址: 127.0.0.1:1080
-  -names   ## 频道名，支持公开频道和私有频道; 建议使用自建的私有频道，减少噪音
-  -session ./session.json  ## 会话保存文件，首次启动需要登陆，之后基于该文件不再需要登陆
-  -gopeed   ## gopeed path
-  -dir     ## 文件下载保存目录
-  -logpath
-  -logcnt 1
-  -loglev 0  ## -1 trace, 0 debug, 1 info, 2 warn, 3 error, 5 fatal, 5 panic, 6 nolevel
-  -logsize 52428800  ## MB
+  -names   ## 频道名，支持公开频道和私有频道
+           ## 可以传多个频道，以,号隔; 如 -names abc,+def 这表示接收公共频道abc和私有频道+def中的消息
+           ## 建议使用自建的私有频道，减少噪音
+```
+- 配置文件示例
+```
+{
+  "cfgdir":"/app/data", ## 配置文件保存目录
+  "saveDir":"/app/download", ## 下载文件保存目录
+  "gopeed":"/app/bin/gopeed", ## BT下载命令路径
+  "httpaddr":":2020", ## web服务端口
+}
 ```
 
 
@@ -58,17 +60,39 @@ usage: ./build/tgautodown options
 ```
 ./build/tgautodown \
   -proxy 192.168.1.7:7891 \
-  -phone +13057359985 \
-  -appid 16103380 -apphash bdd26eb6a54fb59d75d9b2c47ee6eee7 \
-  -session ./data/session.json \
+  -cfg /app/data/config.json \
   -names +AjbQIYhiKlhhNzMx  
 ```
+
+### 首次启动需要登陆TG
+- 浏览器打开： http://<IP>:2020
+- 参考下图流程完成登陆，以后就可以不用再登陆了
+![web登陆](https://github.com/nasbump/tgautodown/blob/main/screenshots/web_login.jpg)
 
 ### 下载保存路径：
 视频、音乐、文档、图片、磁力链、笔记分别保存在`videos`,`music`,`documents`,`photos`,`bt`,`note`目录下。
 
 - 其他
 1. appid和apphash获取：https://core.telegram.org/api/obtaining_api_id
+
+# docker启动
+- docker-compose:
+```
+services:
+  tgautodown:
+    image: nasbump/tgautodown:latest
+    container_name: tgautodown
+    restart: unless-stopped
+    environment:
+      - TG_CHANNEL=+AjbQIYhiKlhhNzMx  # 频道名，私有频道的话一定要带上+号
+      - TG_PROXY=socks5://192.168.31.2:7891 # 代理地址
+    ports:
+      - 2020:2020
+    volumes:
+      - /mnt/sda1/download:/app/download
+      - /mnt/sda1/data:/app/data
+```
+
 
 # 感谢
 - [基于MTProto协议的TG库](github.com/gotd/td/tg)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"tgautodown/internal/logs"
-	"tgautodown/logic"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -28,9 +27,9 @@ func HandleChannelsList(w http.ResponseWriter, r *http.Request) {
 
 	// 从配置中获取频道列表
 	response := ChannelsListResponse{
-		Rtn:      0,
-		Msg:      "succ",
-		Channels: logic.TGCfg.ChannelNames,
+		Rtn: 0,
+		Msg: "succ",
+		// Channels: logic.TGCfg.ChannelNames,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

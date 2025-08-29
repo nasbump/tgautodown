@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"tgautodown/internal/logs"
@@ -100,7 +101,22 @@ func (ts *TgSuber) WithHistoryMsgCnt(cnt int) *TgSuber {
 	return ts
 }
 func (ts *TgSuber) WithSocks5Proxy(addr string) *TgSuber {
+	if addr == "" {
+		return ts
+	}
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			logs.Error(err).Str("url", addr).Msg("parse fail")
+			return ts
+		}
+		ts.Socks5Proxy = u.Host
+		logs.Info().Str("url", addr).Str("addr", ts.Socks5Proxy).Msg("add proxy")
+		return ts
+	}
+
 	ts.Socks5Proxy = addr
+	logs.Info().Str("addr", ts.Socks5Proxy).Msg("add proxy")
 	return ts
 }
 

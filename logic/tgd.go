@@ -24,7 +24,7 @@ var namesMap = map[tg.TgMsgClass][]string{
 
 func TgSuberStart() {
 	Tgs = tg.NewTG(TGCfg.AppID, TGCfg.AppHash, TGCfg.Phone).
-		WithSocks5Proxy(TGCfg.Socks5).
+		WithSocks5Proxy(TGCfg.socks5).
 		WithSession(TGCfg.sessionPath, waitLoginCode)
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
@@ -47,7 +47,7 @@ func TgSuberStart() {
 		}
 	})
 
-	Tgs.Run(TGCfg.ChannelNames)
+	Tgs.Run(TGCfg.channelNames)
 }
 
 var codech chan string
