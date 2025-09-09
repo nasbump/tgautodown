@@ -47,6 +47,7 @@ type TgSuber struct {
 	SessionPath         string
 	Socks5Proxy         string
 	FirstName, UserName string
+	UserPwd             *proxy.Auth
 	GetHistoryCnt       int
 
 	client       *telegram.Client
@@ -61,6 +62,7 @@ type TgLoginCodeHnd func() string
 
 type TgMsg struct {
 	From     *SubChannelInfo
+	Date     int64
 	Text     string
 	FileName string
 	FileSize int64
@@ -104,19 +106,28 @@ func (ts *TgSuber) WithSocks5Proxy(addr string) *TgSuber {
 	if addr == "" {
 		return ts
 	}
-	if strings.Contains(addr, "://") {
-		u, err := url.Parse(addr)
-		if err != nil {
-			logs.Error(err).Str("url", addr).Msg("parse fail")
-			return ts
-		}
-		ts.Socks5Proxy = u.Host
-		logs.Info().Str("url", addr).Str("addr", ts.Socks5Proxy).Msg("add proxy")
+
+	u, err := url.Parse(addr)
+	if err != nil {
+		logs.Error(err).Str("url", addr).Msg("parse fail")
 		return ts
 	}
+	ts.Socks5Proxy = u.Host
+	if un := u.User.Username(); un != "" {
+		ts.UserPwd = &proxy.Auth{
+			User: un,
+		}
+		if p, ok := u.User.Password(); ok {
+			ts.UserPwd.Password = p
+		}
+		logs.Info().Str("url", addr).Str("addr", ts.Socks5Proxy).
+			Str("auth.user", ts.UserPwd.User).
+			Str("auth.pwd", ts.UserPwd.Password).
+			Msg("add proxy")
+	} else {
+		logs.Info().Str("url", addr).Str("addr", ts.Socks5Proxy).Msg("add proxy")
+	}
 
-	ts.Socks5Proxy = addr
-	logs.Info().Str("addr", ts.Socks5Proxy).Msg("add proxy")
 	return ts
 }
 
@@ -139,7 +150,7 @@ func (ts *TgSuber) Run(names []string) error {
 	}
 
 	if ts.Socks5Proxy != "" {
-		socks5, err := proxy.SOCKS5("tcp", ts.Socks5Proxy, nil, proxy.Direct)
+		socks5, err := proxy.SOCKS5("tcp", ts.Socks5Proxy, ts.UserPwd, proxy.Direct)
 		if err != nil {
 			logs.Warn(err).Str("socks5", ts.Socks5Proxy).Msg("create proxy fail")
 			return err
