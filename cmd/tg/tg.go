@@ -20,21 +20,10 @@ func (ts *TgSuber) handle(ctx context.Context, names []string) error {
 		return err
 	}
 
-	// 获取当前用户信息，拿到 self ID
-	self, err := ts.client.Self(ctx)
-	if err != nil {
-		ts.status = TgstatusLogFail
-		logs.Warn(err).Msg("get self fail")
-		return err
-	}
-
 	ts.status = TgstatusLogOk
-	ts.FirstName = self.FirstName
-	ts.UserName = self.Username
-	logs.Info().Str("firstname", self.FirstName).Str("username", self.Username).
-		Int64("id", self.ID).Int64("accesshash", self.AccessHash).
-		Bool("bot", self.Bot).Str("phone", ts.Phone).
-		Int("appid", ts.AppID).Msg("ready")
+	logs.Info().Str("firstname", ts.FirstName).Str("username", ts.UserName).
+		Int64("id", ts.UserID).Int64("accesshash", ts.AccessHash).
+		Str("phone", ts.UserPhone).Int("appid", ts.AppID).Msg("ready")
 
 	cs := ts.getChannels(ctx, names)
 	if len(cs) == 0 {
@@ -59,49 +48,29 @@ func (ts *TgSuber) handle(ctx context.Context, names []string) error {
 }
 
 func (ts *TgSuber) login(ctx context.Context) error {
+	flow := auth.NewFlow(ts, auth.SendCodeOptions{})
+
 	tsca := ts.client.Auth()
-	// 尝试从会话恢复
-	status, err := tsca.Status(ctx)
+
+	if err := tsca.IfNecessary(ctx, flow); err != nil {
+		logs.Error(err).Msg("login failed")
+		return err
+	}
+
+	self, err := ts.client.Self(ctx)
 	if err != nil {
+		if auth.IsUnauthorized(err) {
+			logs.Fatal(err).Msg("ErrClientNotAuth")
+			return ErrClientNotAuth
+		}
 		logs.Warn(err).Msg("client.Auth.Status fail")
 		return err
 	}
 
-	if status.Authorized {
-		return nil
-	}
-
-	if ts.getLoginCode == nil {
-		logs.Warn(ErrNoLoginCodeHnd).Send()
-		return ErrNoLoginCodeHnd
-	}
-
-	// 发送验证码请求
-	sentCode, err := tsca.SendCode(ctx, ts.Phone, auth.SendCodeOptions{})
-	if err != nil {
-		logs.Error(err).Msg("client.SendCode fail")
-		return err
-	}
-	// 类型断言获取PhoneCodeHash
-	codeSent, ok := sentCode.(*tg.AuthSentCode)
-	if !ok {
-		logs.Error(nil).Msg("invalid tg.AuthSentCode")
-		return err
-	}
-
-	for {
-		code := ts.getLoginCode()
-		if code == "" {
-			continue
-		}
-
-		// 验证登录
-		if _, err := tsca.SignIn(ctx, ts.Phone, code, codeSent.PhoneCodeHash); err != nil {
-			logs.Error(err).Str("code", code).Msg("signin fail")
-			continue
-		}
-		break
-	}
+	ts.FirstName = self.FirstName
+	ts.UserName = self.Username
+	ts.AccessHash = self.AccessHash
+	ts.UserID = self.ID
 
 	return nil
 }
@@ -111,9 +80,8 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 
 	api := ts.client.API()
 	for _, name := range names {
-		if strings.HasPrefix(name, "+") { // https://t.me/+sZF0XrTZVq02M2Yx
-			name = strings.TrimPrefix(name, "+")
-			invite, err := api.MessagesCheckChatInvite(ctx, name)
+		if after, ok := strings.CutPrefix(name, "+"); ok { // https://t.me/+sZF0XrTZVq02M2Yx
+			invite, err := api.MessagesCheckChatInvite(ctx, after)
 			if err != nil {
 				logs.Warn(err).Str("name", name).Msg("check invite fail")
 				continue
@@ -122,7 +90,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 			case *tg.ChatInviteAlready:
 				if ch, ok := inv.Chat.(*tg.Channel); ok {
 					sci := SubChannelInfo{
-						Name:       name, // ch.Username, // 私有频道没有username
+						Name:       after, // ch.Username, // 私有频道没有username
 						Title:      ch.Title,
 						ChannelID:  ch.ID,
 						AccessHash: ch.AccessHash,

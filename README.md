@@ -41,6 +41,7 @@ $ ./tgautodown -h
 usage: ./build/tgautodown options
   -cfg     ## 配置文件，默认为: /app/data/config.json
   -proxy   ## socks5代理地址: 127.0.0.1:1080
+  -f2a     ## TG账号开启了两步认证的话，这里需要输入密码
   -names   ## 频道名，支持公开频道和私有频道
            ## 可以传多个频道，以,号隔; 如 -names abc,+def 这表示接收公共频道abc和私有频道+def中的消息
            ## 建议使用自建的私有频道，减少噪音
@@ -85,7 +86,8 @@ services:
     restart: unless-stopped
     environment:
       - TG_CHANNEL=+AjbQIYhiKlhhNzMx  # 频道名，私有频道的话一定要带上+号
-      - TG_PROXY=socks5://192.168.31.2:7891 # 代理地址
+      - TG_PROXY=socks5://192.168.31.2:7891 # 代理地址，目前只支持socks5代理
+      - TG_F2A=f2apassword  # TG账号开启了两步认证的话，这里需要输入密码
     ports:
       - 2020:2020
     volumes:

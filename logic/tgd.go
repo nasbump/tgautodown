@@ -25,7 +25,7 @@ var namesMap = map[tg.TgMsgClass][]string{
 func TgSuberStart() {
 	Tgs = tg.NewTG(TGCfg.AppID, TGCfg.AppHash, TGCfg.Phone).
 		WithSocks5Proxy(TGCfg.socks5).
-		WithSession(TGCfg.sessionPath, waitLoginCode)
+		WithSession(TGCfg.sessionPath, TGCfg.f2apwd, waitLoginCode)
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
 		return doDownload(Tgs, tg.TgAudio, msgid, tgmsg)

@@ -12,6 +12,7 @@ import (
 	"tgautodown/internal/logs"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/net/proxy"
 
 	"github.com/gotd/td/session"
@@ -30,6 +31,8 @@ const (
 var (
 	ErrMsgClsUnsupport = errors.New("msgcls unsupport")
 	ErrNoLoginCodeHnd  = errors.New("no login code handle")
+	ErrNoF2APassword   = errors.New("no F2A passwd")
+	ErrClientNotAuth   = errors.New("client not Authorized")
 )
 
 type SubChannelInfo struct {
@@ -43,13 +46,16 @@ type SubChannelInfo struct {
 type TgSuber struct {
 	AppID               int
 	AppHash             string
-	Phone               string
+	UserPhone           string
 	SessionPath         string
 	Socks5Proxy         string
+	F2APassword         string
 	FirstName, UserName string
+	UserID, AccessHash  int64
 	UserPwd             *proxy.Auth
 	GetHistoryCnt       int
 
+	enableTGLog  bool
 	client       *telegram.Client
 	getLoginCode TgLoginCodeHnd
 	mhnds        map[TgMsgClass]TgMsgHnd
@@ -83,21 +89,25 @@ const (
 
 func NewTG(appid int, apphash, phone string) *TgSuber {
 	ts := &TgSuber{
-		AppID:   appid,
-		AppHash: apphash,
-		Phone:   phone,
-		mhnds:   map[TgMsgClass]TgMsgHnd{},
-		status:  TgstatusInit,
+		AppID:     appid,
+		AppHash:   apphash,
+		UserPhone: phone,
+		mhnds:     map[TgMsgClass]TgMsgHnd{},
+		status:    TgstatusInit,
 	}
 	return ts
 }
 
-func (ts *TgSuber) WithSession(path string, hnd TgLoginCodeHnd) *TgSuber {
+func (ts *TgSuber) WithSession(path, f2apwd string, hnd TgLoginCodeHnd) *TgSuber {
 	ts.SessionPath = path
+	ts.F2APassword = f2apwd
 	ts.getLoginCode = hnd
 	return ts
 }
-
+func (ts *TgSuber) EnableTGLogger() *TgSuber {
+	ts.enableTGLog = true
+	return ts
+}
 func (ts *TgSuber) WithHistoryMsgCnt(cnt int) *TgSuber {
 	ts.GetHistoryCnt = cnt
 	return ts
@@ -137,12 +147,11 @@ func (ts *TgSuber) WithMsgHandle(mcls TgMsgClass, hnd TgMsgHnd) *TgSuber {
 }
 
 func (ts *TgSuber) Run(names []string) error {
-	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("phone", ts.Phone).Str("socks5", ts.Socks5Proxy).Strs("channel", names).Send()
+	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("phone", ts.UserPhone).Str("socks5", ts.Socks5Proxy).Strs("channel", names).Send()
 
-	// zlog, _ := zap.NewDevelopmentConfig().Build()
-
-	ops := telegram.Options{
-		// Logger: zlog,
+	ops := telegram.Options{}
+	if ts.enableTGLog {
+		ops.Logger, _ = zap.NewDevelopmentConfig().Build()
 	}
 
 	if ts.SessionPath != "" {

@@ -24,6 +24,7 @@ type TgLogicConfig struct {
 
 	channelNames []string `json:"-"`
 	socks5       string   `json:"-"`
+	f2apwd       string   `json:"-"`
 	cfgPath      string   `json:"-"`
 	sessionPath  string   `json:"-"`
 }
@@ -41,6 +42,7 @@ func ParseCfg() {
 
 	TGCfg.channelNames = utils.XmArgValStrings("names", "channels name", "")
 	TGCfg.socks5 = utils.XmArgValString("proxy", "socks5://127.0.0.1:1080", "")
+	TGCfg.f2apwd = utils.XmArgValString("f2a", "password for F2A", "")
 
 	cfg := utils.XmArgValString("cfg", "", TGCfg.CfgDir+"/config.json")
 
