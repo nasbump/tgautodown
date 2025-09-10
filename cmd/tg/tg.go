@@ -5,15 +5,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"tgautodown/internal/logs"
-	"time"
 
 	"github.com/gotd/td/telegram/auth"
+
+	// "github.com/gotd/td/telegram/updates/storage/memory"
 	"github.com/gotd/td/tg"
 )
 
-func (ts *TgSuber) handle(ctx context.Context, names []string) error {
+func (ts *TgSuber) run(ctx context.Context, names []string) error {
 	ts.status = TgstatusLoging
 	if err := ts.login(ctx); err != nil {
 		ts.status = TgstatusLogFail
@@ -30,21 +30,16 @@ func (ts *TgSuber) handle(ctx context.Context, names []string) error {
 		logs.Error(nil).Msg("no channels need subscribe")
 		return nil
 	}
+	ts.scis = cs
 
-	wg := sync.WaitGroup{}
-	wg.Add(len(cs))
-	for _, sci := range cs {
-		go func() {
-			if ts.GetHistoryCnt > 0 {
-				ts.recvChannelHistoryMsg(ctx, &sci)
-			}
-			ts.recvChannelDiffMsg(ctx, &sci)
-			wg.Done()
-		}()
+	if ts.GetHistoryCnt > 0 {
+		for _, sci := range cs {
+			ts.recvHistoryMsg(ctx, &sci)
+		}
 	}
 
-	wg.Wait()
-	return nil
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (ts *TgSuber) login(ctx context.Context) error {
@@ -94,6 +89,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 						Title:      ch.Title,
 						ChannelID:  ch.ID,
 						AccessHash: ch.AccessHash,
+						chType:     ChChannel,
 					}
 					cs[ch.ID] = sci
 					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("private channel")
@@ -102,6 +98,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 						Name:      after, // ch.Username, // 私有频道没有username
 						Title:     ch.Title,
 						ChannelID: ch.ID,
+						chType:    ChGroup,
 					}
 					cs[ch.ID] = sci
 					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("private group")
@@ -133,6 +130,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 					Title:      ch.Title,
 					ChannelID:  ch.ID,
 					AccessHash: ch.AccessHash,
+					chType:     ChChannel,
 				}
 
 				cs[ch.ID] = sci
@@ -142,6 +140,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 					Name:      name,
 					Title:     ch.Title,
 					ChannelID: ch.ID,
+					chType:    ChGroup,
 				}
 				cs[ch.ID] = sci
 				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("public group")
@@ -153,116 +152,67 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 	return cs
 }
 
-func (ts *TgSuber) recvChannelHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
+func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
 	api := ts.client.API()
 
-	peer := &tg.InputPeerChannel{
-		ChannelID:  sci.ChannelID,
-		AccessHash: sci.AccessHash,
-	}
-
-	// 建立上下文（必须要调一次，不然不会推送消息）
-	_, err := api.ChannelsGetFullChannel(ctx, &tg.InputChannel{
-		ChannelID:  peer.ChannelID,
-		AccessHash: peer.AccessHash,
-	})
-	if err != nil {
-		logs.Error(err).Str("channel", sci.Name).Str("title", sci.Title).Msg("ChannelsGetFullChannel fail")
-		return
-	}
-
-	history, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
-		Peer:  peer,
+	req := &tg.MessagesGetHistoryRequest{
 		Limit: ts.GetHistoryCnt,
-	})
-	if err != nil {
-		logs.Warn(err).Str("channel", sci.Name).Str("title", sci.Title).Msg("MessagesGetHistory fail")
 	}
 
-	msgs, ok := history.(*tg.MessagesChannelMessages)
-	if !ok {
-		logs.Debug().Str("channel", sci.Name).Str("title", sci.Title).Msgf("recv non-channel-msg:%+v", msgs)
-		return
-	}
-
-	logs.Debug().Int("msgs.Messages.size", len(msgs.Messages))
-	for _, m := range msgs.Messages {
-		if msg, ok := m.(*tg.Message); ok {
-			ts.recvChannelMsgHandle(ctx, msg, sci)
+	switch sci.chType {
+	case ChChannel:
+		req.Peer = &tg.InputPeerChannel{
+			ChannelID:  sci.ChannelID,
+			AccessHash: sci.AccessHash,
 		}
-	}
-}
-
-func (ts *TgSuber) recvChannelDiffMsg(ctx context.Context, sci *SubChannelInfo) {
-	api := ts.client.API()
-
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	peer := &tg.InputPeerChannel{
-		ChannelID:  sci.ChannelID,
-		AccessHash: sci.AccessHash,
+	case ChGroup:
+		req.Peer = &tg.InputPeerChat{
+			ChatID: sci.ChannelID,
+		}
+	default:
+		logs.Warn(nil).Str("title", sci.Title).Msg("unknown channel or group")
+		return
 	}
 
-	// 建立上下文（必须要调一次，不然不会推送消息）
-	full, err := api.ChannelsGetFullChannel(ctx, &tg.InputChannel{
-		ChannelID:  peer.ChannelID,
-		AccessHash: peer.AccessHash,
-	})
+	history, err := api.MessagesGetHistory(ctx, req)
 	if err != nil {
-		logs.Error(err).Str("channel", sci.Name).Str("title", sci.Title).Msg("ChannelsGetFullChannel fail")
-		return
+		logs.Warn(err).Str("group", sci.Name).Str("title", sci.Title).Msg("MessagesGetHistory fail")
 	}
 
-	chatFull, ok := full.FullChat.(*tg.ChannelFull)
-	if !ok {
-		logs.Error(err).Str("channel", sci.Name).Str("title", sci.Title).Msg("FullChat fail")
-		return
-	}
-
-	pts := chatFull.Pts
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			diff, err := api.UpdatesGetChannelDifference(ctx, &tg.UpdatesGetChannelDifferenceRequest{
-				Channel: &tg.InputChannel{
-					ChannelID:  peer.ChannelID,
-					AccessHash: peer.AccessHash,
-				},
-				Filter: &tg.ChannelMessagesFilterEmpty{},
-				Pts:    pts,
-				Limit:  50,
-			})
-			if err != nil {
-				logs.Warn(err).Str("channel", sci.Name).Str("title", sci.Title).Msg("UpdatesGetChannelDifference fail")
-				continue
-			}
-
-			switch upd := diff.(type) {
-			case *tg.UpdatesChannelDifference:
-				for _, m := range upd.NewMessages {
-					if msg, ok := m.(*tg.Message); ok {
-						ts.recvChannelMsgHandle(ctx, msg, sci)
-					}
-				}
-				// 更新 PTS
-				pts = upd.Pts
-			case *tg.UpdatesChannelDifferenceEmpty:
-				// 没有新消息，更新 PTS
-				pts = upd.Pts
+	switch msgs := history.(type) {
+	case *tg.MessagesMessages:
+		logs.Debug().Int("msgs.Messages.size", len(msgs.Messages)).Send()
+		for _, m := range msgs.Messages {
+			if msg, ok := m.(*tg.Message); ok {
+				ts.recvChannelMsgHandle(ctx, msg, sci)
 			}
 		}
+	case *tg.MessagesChannelMessages:
+		logs.Debug().Int("msgs.Messages.size", len(msgs.Messages)).Send()
+		for _, m := range msgs.Messages {
+			if msg, ok := m.(*tg.Message); ok {
+				ts.recvChannelMsgHandle(ctx, msg, sci)
+			}
+		}
+	case *tg.MessagesMessagesSlice:
+		logs.Debug().Int("msgs.Messages.size", len(msgs.Messages)).Send()
+		for _, m := range msgs.Messages {
+			if msg, ok := m.(*tg.Message); ok {
+				ts.recvChannelMsgHandle(ctx, msg, sci)
+			}
+		}
+	default:
+		logs.Warn(nil).Str("group", sci.Name).Str("history", msgs.TypeName()).Msg("unknown history")
 	}
 }
 
 func (ts *TgSuber) recvChannelMsgHandle(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
 	if msg.ReplyTo != nil {
-		logs.Trace().Msg("skip reply.msg")
+		logs.Trace().Int("msgid", msg.ID).Msg("skip reply.msg")
 		return nil
 	}
+
+	logs.Debug().Int("msgid", msg.ID).Str("from", sci.Title).Msg("on recv msg")
 
 	if msg.Media == nil { // 接收到文本消息
 		return ts.recvChannelNoteMsg(ctx, msg, sci)

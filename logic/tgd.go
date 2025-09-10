@@ -26,6 +26,7 @@ func TgSuberStart() {
 	Tgs = tg.NewTG(TGCfg.AppID, TGCfg.AppHash, TGCfg.Phone).
 		WithSocks5Proxy(TGCfg.socks5).
 		WithSession(TGCfg.sessionPath, TGCfg.f2apwd, waitLoginCode)
+		// WithHistoryMsgCnt(2).
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
 		return doDownload(Tgs, tg.TgAudio, msgid, tgmsg)
@@ -81,7 +82,7 @@ func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg)
 		replyMsg = fmt.Sprintf("下载成功: %s\n- 消息ID: %d\n- 保存路径: %s",
 			tgmsg.FileName, msgid, savePath)
 	}
-	logs.Debug().Msg(replyMsg)
+	logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
 	return ts.ReplyTo(tgmsg, replyMsg)
 }
 
@@ -96,7 +97,7 @@ func downloadMagnet(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.Tg
 	subDir := namesMap[mtype][0]
 	mtDesc := namesMap[mtype][1]
 	url := tgmsg.Text
-	logs.Debug().Int("msgid", msgid).Str("url", url).Msg("recv magnet")
+	logs.Debug().Int("msgid", msgid).Str("url", url).Str("from", tgmsg.From.Title).Msg("recv magnet")
 
 	replyMsg := fmt.Sprintf("正在下载%s:\n- 消息ID: %d", mtDesc, msgid)
 	ts.ReplyTo(tgmsg, replyMsg)
@@ -120,7 +121,7 @@ func writeNote(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) 
 	subDir := namesMap[mtype][0]
 	mtDesc := namesMap[mtype][1]
 	note := tgmsg.Text
-	logs.Debug().Int("msgid", msgid).Str("note", note).Msg("recv note")
+	logs.Debug().Int("msgid", msgid).Str("note", note).Str("from", tgmsg.From.Title).Msg("recv note")
 
 	savePath := filepath.Join(TGCfg.SaveDir, subDir)
 	createDir(savePath)

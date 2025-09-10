@@ -35,12 +35,18 @@ var (
 	ErrClientNotAuth   = errors.New("client not Authorized")
 )
 
+const (
+	ChChannel int = iota
+	ChGroup
+)
+
 type SubChannelInfo struct {
 	Name       string
 	Title      string
 	ChannelID  int64
 	AccessHash int64
 	Pts        int // 保存频道的 PTS（状态点）
+	chType     int
 }
 
 type TgSuber struct {
@@ -58,6 +64,7 @@ type TgSuber struct {
 	enableTGLog  bool
 	client       *telegram.Client
 	getLoginCode TgLoginCodeHnd
+	scis         map[int64]SubChannelInfo
 	mhnds        map[TgMsgClass]TgMsgHnd
 	status       int
 }
@@ -181,26 +188,43 @@ func (ts *TgSuber) Run(names []string) error {
 		ops.DialTimeout = 15 * time.Second
 	}
 
+	ops.UpdateHandler = ts
 	ts.client = telegram.NewClient(ts.AppID, ts.AppHash, ops)
 
 	return ts.client.Run(context.Background(), func(ctx context.Context) error {
-		return ts.handle(ctx, names)
+		return ts.run(ctx, names)
 	})
 }
 
 func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
-	_, err := ts.client.API().MessagesSendMessage(msg.ctx, &tg.MessagesSendMessageRequest{
-		Peer: &tg.InputPeerChannel{
-			ChannelID:  msg.From.ChannelID,
-			AccessHash: msg.From.AccessHash,
-		},
+	// return nil
+	req := &tg.MessagesSendMessageRequest{
 		Message:  text,
-		RandomID: rand.Int63(), // 必须唯一，可用 rand.Int63()
+		RandomID: rand.Int63(), // 必须唯一
 		ReplyTo: &tg.InputReplyToMessage{
 			ReplyToMsgID: msg.msg.ID, // 你要回复的消息 ID
 		},
-	})
-	return err
+	}
+	switch msg.From.chType {
+	case ChChannel:
+		req.Peer = &tg.InputPeerChannel{
+			ChannelID:  msg.From.ChannelID,
+			AccessHash: msg.From.AccessHash,
+		}
+	case ChGroup:
+		req.Peer = &tg.InputPeerChat{
+			ChatID: msg.From.ChannelID,
+		}
+	default:
+		logs.Warn(nil).Str("title", msg.From.Title).Msg("unknown channel or group")
+		return nil
+	}
+	if _, err := ts.client.API().MessagesSendMessage(msg.ctx, req); err != nil {
+		logs.Warn(err).Str("title", msg.From.Title).Msg("reply fail")
+		return err
+	}
+
+	return nil
 }
 
 func (ts *TgSuber) SaveFile(msg *TgMsg, savePath string) error {
