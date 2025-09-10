@@ -8,8 +8,6 @@ import (
 	"tgautodown/internal/logs"
 
 	"github.com/gotd/td/telegram/auth"
-
-	// "github.com/gotd/td/telegram/updates/storage/memory"
 	"github.com/gotd/td/tg"
 )
 
@@ -177,6 +175,7 @@ func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
 	history, err := api.MessagesGetHistory(ctx, req)
 	if err != nil {
 		logs.Warn(err).Str("group", sci.Name).Str("title", sci.Title).Msg("MessagesGetHistory fail")
+		return
 	}
 
 	switch msgs := history.(type) {
@@ -225,6 +224,7 @@ func (ts *TgSuber) recvChannelMsgHandle(ctx context.Context, msg *tg.Message, sc
 		return ts.recvChannelMediaMsg(ctx, msg, sci)
 	}
 	// 其他消息不支持
+	logs.Warn(ErrMsgClsUnsupport).Int("msgid", msg.ID).Str("from", sci.Title).Msg("recv unknown msg")
 	return ErrMsgClsUnsupport
 }
 func (ts *TgSuber) recvChannelNoteMsg(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
@@ -241,6 +241,7 @@ func (ts *TgSuber) recvChannelNoteMsg(ctx context.Context, msg *tg.Message, sci 
 	tgmsg := TgMsg{
 		From: sci,
 		Text: msg.Message,
+		Date: int64(msg.Date),
 
 		mcls: TgNote,
 		msg:  msg,
@@ -285,8 +286,10 @@ func (ts *TgSuber) recvChannelPhotoMsg(ctx context.Context, msg *tg.Message, sci
 
 	tgmsg := TgMsg{
 		From:     sci,
+		Text:     msg.Message,
 		FileName: fmt.Sprintf("%s_%d.jpg", sci.Name, photo.Date),
 		FileSize: int64(maxSize),
+		Date:     int64(msg.Date),
 
 		mcls:  TgPhoto,
 		ptype: ptype,
@@ -323,7 +326,9 @@ func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci
 
 	tgmsg := TgMsg{
 		From:     sci,
+		Text:     msg.Message,
 		FileSize: int64(doc.GetSize()),
+		Date:     int64(msg.Date),
 
 		msg: msg,
 		ctx: ctx,
