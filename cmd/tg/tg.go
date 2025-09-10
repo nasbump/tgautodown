@@ -96,22 +96,38 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 						AccessHash: ch.AccessHash,
 					}
 					cs[ch.ID] = sci
-					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("private")
+					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("private channel")
+				} else if ch, ok := inv.Chat.(*tg.Chat); ok {
+					sci := SubChannelInfo{
+						Name:      after, // ch.Username, // 私有频道没有username
+						Title:     ch.Title,
+						ChannelID: ch.ID,
+					}
+					cs[ch.ID] = sci
+					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("private group")
+				} else {
+					logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).
+						Str("chat.type", inv.Chat.TypeName()).Msg("unknown chat")
 				}
 			case *tg.ChatInvite: // 未加入，需要调用 MessagesImportChatInvite 加入
 				// joined, _ := api.MessagesImportChatInvite(ctx, name)
-				logs.Warn(nil).Str("name", name).Msg("not in channel")
+				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).
+					Bool("Channel", inv.Channel).
+					Bool("Public", inv.Public).Msg("not in channel")
+			default:
+				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).Msg("unknown invite")
 			}
 		} else {
 			res, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
 				Username: name,
 			})
 			if err != nil {
-				logs.Warn(err).Str("channel.name", name).Msg("resolve fail")
+				logs.Warn(err).Str("name", name).Msg("resolve fail")
 				continue
 			}
 
-			if ch, ok := res.Chats[0].(*tg.Channel); ok {
+			inv := res.Chats[0]
+			if ch, ok := inv.(*tg.Channel); ok {
 				sci := SubChannelInfo{
 					Name:       ch.Username,
 					Title:      ch.Title,
@@ -120,7 +136,17 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 				}
 
 				cs[ch.ID] = sci
-				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("public")
+				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("public chanel")
+			} else if ch, ok := inv.(*tg.Chat); ok {
+				sci := SubChannelInfo{
+					Name:      name,
+					Title:     ch.Title,
+					ChannelID: ch.ID,
+				}
+				cs[ch.ID] = sci
+				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("public group")
+			} else {
+				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).Msg("unknown invite")
 			}
 		}
 	}
