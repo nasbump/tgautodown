@@ -25,8 +25,9 @@ var namesMap = map[tg.TgMsgClass][]string{
 func TgSuberStart() {
 	Tgs = tg.NewTG(TGCfg.AppID, TGCfg.AppHash, TGCfg.Phone).
 		WithSocks5Proxy(TGCfg.socks5).
+		WithRetryRule(TGCfg.maxSaveRetryCnt, TGCfg.maxSaveRetrySecond).
 		WithSession(TGCfg.sessionPath, TGCfg.f2apwd, waitLoginCode)
-		// WithHistoryMsgCnt(2).
+	// WithHistoryMsgCnt(2).
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
 		return doDownload(Tgs, tg.TgAudio, msgid, tgmsg)
@@ -89,8 +90,8 @@ func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg)
 func getSavePath(mtype, filename string) string {
 	savePath := filepath.Join(TGCfg.SaveDir, mtype)
 	createDir(savePath)
-	savePath = filepath.Join(savePath, filename)
-	return uniquePath(savePath)
+	return filepath.Join(savePath, filename)
+	// return uniquePath(savePath)
 }
 
 func downloadMagnet(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) error {

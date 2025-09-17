@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"tgautodown/internal/logs"
+	"time"
 
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
@@ -36,7 +37,8 @@ func (ts *TgSuber) run(ctx context.Context, names []string) error {
 		}
 	}
 
-	<-ctx.Done()
+	// <-ctx.Done()
+	ts.fileSaveLoop()
 	return ctx.Err()
 }
 
@@ -287,7 +289,7 @@ func (ts *TgSuber) recvChannelPhotoMsg(ctx context.Context, msg *tg.Message, sci
 	tgmsg := TgMsg{
 		From:     sci,
 		Text:     msg.Message,
-		FileName: fmt.Sprintf("%s_%d.jpg", sci.Name, photo.Date),
+		FileName: fmt.Sprintf("%s_%d_%d.jpg", sci.Name, photo.Date, msg.ID),
 		FileSize: int64(maxSize),
 		Date:     int64(msg.Date),
 
@@ -378,9 +380,55 @@ func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string)
 	return ts.fileSaveLocation(ctx, tgmsg.FileSize, savePath, location)
 }
 
+func resetSaveRetry() (int, time.Time) {
+	return 0, time.Now()
+}
+func (ts *TgSuber) checkSaveRetry(cnt int, beg time.Time) bool {
+	if ts.MaxSaveRetryCnt > 0 && cnt > ts.MaxSaveRetryCnt {
+		return false
+
+	}
+	if ts.MaxSaveRetryTime > 0 {
+		if cost := time.Since(beg).Milliseconds(); cost > int64(ts.MaxSaveRetryTime)*1000 {
+			return false
+		}
+	}
+	return true
+}
+
+type fileSaveMsg struct {
+	ctx context.Context
+	// tgmsg    *TgMsg
+	filesize int64
+	filename string
+	location tg.InputFileLocationClass
+	resChan  chan error
+}
+
+var fileSaveChan = make(chan *fileSaveMsg, 200)
+
 func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filename string, location tg.InputFileLocationClass) error {
+	fsm := &fileSaveMsg{
+		ctx:      ctx,
+		filesize: filesize,
+		filename: filename,
+		location: location,
+		resChan:  make(chan error, 1),
+	}
+
+	fileSaveChan <- fsm
+	return <-fsm.resChan
+}
+
+func (ts *TgSuber) fileSaveLoop() {
+	for fsm := range fileSaveChan {
+		fsm.resChan <- ts.doFileSaveLocation(fsm.ctx, fsm.filesize, fsm.filename, fsm.location)
+	}
+}
+
+func (ts *TgSuber) doFileSaveLocation(ctx context.Context, filesize int64, filename string, location tg.InputFileLocationClass) error {
 	// 打开本地文件
-	file, err := os.Create(filename)
+	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
@@ -389,8 +437,13 @@ func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filenam
 	// 分块下载
 	const chunkSize = 512 * 1024 // 512 KB
 	offset := int64(0)
+	if finfo, err := file.Stat(); err == nil {
+		offset = finfo.Size()
+	}
 
 	api := ts.client.API()
+	retryCnt := 0
+	retryBeg := time.Now()
 	for {
 		// 请求文件分片
 		part, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
@@ -399,8 +452,16 @@ func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filenam
 			Limit:    chunkSize,
 		})
 		if err != nil {
-			return fmt.Errorf("get file part: %w", err)
+			logs.Warn(err).Str("file", filename).Int64("offset", offset).Int64("filesize", filesize).
+				Int("retry", retryCnt).Msg("get file part fail")
+			if retry := ts.checkSaveRetry(retryCnt, retryBeg); retry {
+				retryCnt++
+				continue
+			}
+			return err
 		}
+		// 成功则重置
+		retryCnt, retryBeg = resetSaveRetry()
 
 		// 判断类型
 		switch v := part.(type) {
@@ -409,7 +470,7 @@ func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filenam
 			vsize := len(v.Bytes)
 			wsize, err := file.Write(v.Bytes)
 			if err != nil || vsize != wsize {
-				logs.Warn(err).Int("vsize", vsize).Int("wsize", wsize).Msg("write file fail")
+				logs.Warn(err).Str("file", filename).Int("vsize", vsize).Int("wsize", wsize).Msg("write file fail")
 				return fmt.Errorf("write file: %w", err)
 			}
 
@@ -430,5 +491,5 @@ func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filenam
 
 func calcDlProgress(dl, tot int64) string {
 	percent := float64(dl) * 100 / float64(tot)
-	return fmt.Sprintf("%d/%d=%.2f", dl, tot, percent)
+	return fmt.Sprintf("%d/%d=%.2f%%", dl, tot, percent)
 }

@@ -60,6 +60,8 @@ type TgSuber struct {
 	UserID, AccessHash  int64
 	UserPwd             *proxy.Auth
 	GetHistoryCnt       int
+	MaxSaveRetryCnt     int // 保存文件时最大重试次数
+	MaxSaveRetryTime    int // 保存文件时最大重试时长
 
 	enableTGLog  bool
 	client       *telegram.Client
@@ -113,6 +115,11 @@ func (ts *TgSuber) WithSession(path, f2apwd string, hnd TgLoginCodeHnd) *TgSuber
 }
 func (ts *TgSuber) EnableTGLogger() *TgSuber {
 	ts.enableTGLog = true
+	return ts
+}
+func (ts *TgSuber) WithRetryRule(maxCnt, maxTime int) *TgSuber {
+	ts.MaxSaveRetryCnt = maxCnt
+	ts.MaxSaveRetryTime = maxTime
 	return ts
 }
 func (ts *TgSuber) WithHistoryMsgCnt(cnt int) *TgSuber {
