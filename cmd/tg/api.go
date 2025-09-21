@@ -3,7 +3,6 @@ package tg
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math/rand"
 	"net"
 	"net/url"
@@ -196,11 +195,14 @@ func (ts *TgSuber) Run(names []string) error {
 	}
 
 	ops.UpdateHandler = ts
-	ts.client = telegram.NewClient(ts.AppID, ts.AppHash, ops)
 
-	return ts.client.Run(context.Background(), func(ctx context.Context) error {
-		return ts.run(ctx, names)
-	})
+	for {
+		ts.client = telegram.NewClient(ts.AppID, ts.AppHash, ops)
+
+		ts.client.Run(context.Background(), func(ctx context.Context) error {
+			return ts.run(ctx, names)
+		})
+	}
 }
 
 func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
@@ -258,10 +260,10 @@ func sanitizeFileName(name string) string {
 	// 去掉 Windows/Linux 不允许的字符
 	re := regexp.MustCompile(`[\\/:*?"<>|]+`)
 	name = re.ReplaceAllString(name, "_")
-	// 如果结果为空，就用时间戳兜底
-	if name == "" {
-		name = fmt.Sprintf("file_%d", time.Now().Unix())
-	}
+	// // 如果结果为空，就用时间戳兜底
+	// if name == "" {
+	// 	name = fmt.Sprintf("file_%d", time.Now().Unix())
+	// }
 	return name
 }
 

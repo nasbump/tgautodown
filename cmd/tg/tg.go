@@ -2,12 +2,14 @@ package tg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"tgautodown/internal/logs"
 	"time"
 
+	"github.com/gotd/td/rpc"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 )
@@ -31,14 +33,15 @@ func (ts *TgSuber) run(ctx context.Context, names []string) error {
 	}
 	ts.scis = cs
 
+	go ts.fileSaveLoop(ctx)
+
 	if ts.GetHistoryCnt > 0 {
 		for _, sci := range cs {
 			ts.recvHistoryMsg(ctx, &sci)
 		}
 	}
 
-	// <-ctx.Done()
-	ts.fileSaveLoop()
+	<-ctx.Done()
 	return ctx.Err()
 }
 
@@ -207,6 +210,57 @@ func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
 	}
 }
 
+func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLocationClass {
+	api := ts.client.API()
+
+	fresh, err := api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}})
+	if err != nil {
+		logs.Warn(err).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Msg("refresh fail")
+		return nil
+	}
+
+	switch msgs := fresh.(type) {
+	case *tg.MessagesMessages:
+		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
+			tgmsg.msg = newMsg
+		}
+	case *tg.MessagesChannelMessages:
+		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
+			tgmsg.msg = newMsg
+		}
+	case *tg.MessagesMessagesSlice:
+		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
+			tgmsg.msg = newMsg
+		}
+	default:
+		logs.Warn(nil).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Str("fresh", msgs.TypeName()).Msg("unknown fresh")
+		return nil
+
+	}
+
+	switch tgmsg.mcls {
+	case TgPhoto:
+		msg := tgmsg.msg
+		media := msg.Media.(*tg.MessageMediaPhoto)
+		photo := media.Photo.(*tg.Photo)
+		return &tg.InputPhotoFileLocation{
+			ID:            photo.ID,
+			AccessHash:    photo.AccessHash,
+			FileReference: photo.FileReference,
+			ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
+		}
+	default:
+		msg := tgmsg.msg
+		media := msg.Media.(*tg.MessageMediaDocument)
+		doc := media.Document.(*tg.Document)
+		return &tg.InputDocumentFileLocation{
+			ID:            doc.ID,
+			AccessHash:    doc.AccessHash,
+			FileReference: doc.FileReference,
+		}
+	}
+}
+
 func (ts *TgSuber) recvChannelMsgHandle(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
 	if msg.ReplyTo != nil {
 		logs.Trace().Int("msgid", msg.ID).Msg("skip reply.msg")
@@ -315,7 +369,7 @@ func (ts *TgSuber) savePhoto(ctx context.Context, tgmsg *TgMsg, savePath string)
 		ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
 	}
 
-	return ts.fileSaveLocation(ctx, tgmsg.FileSize, savePath, location)
+	return ts.fileSaveLocation(ctx, tgmsg, savePath, location)
 }
 
 func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
@@ -336,17 +390,34 @@ func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci
 		ctx: ctx,
 	}
 
+	txt := sanitizeFileName(msg.Message)
+	if len(msg.Message) > 255 {
+		txt = tgmsg.Text[:255]
+	}
+
 	switch {
 	case strings.HasPrefix(doc.MimeType, "video/"):
 		tgmsg.mcls = TgVideo
-		tgmsg.FileName = fmt.Sprintf("%s_%d.mp4", sci.Name, doc.Date)
+		if len(txt) > 0 {
+			tgmsg.FileName = txt + ".mp4"
+		} else {
+			tgmsg.FileName = fmt.Sprintf("%s_%d.mp4", sci.Name, doc.Date)
+		}
 	case strings.HasPrefix(doc.MimeType, "audio/"):
 		tgmsg.mcls = TgAudio
-		tgmsg.FileName = fmt.Sprintf("%s_%d.mp3", sci.Name, doc.Date)
+		if len(txt) > 0 {
+			tgmsg.FileName = txt + ".mp3"
+		} else {
+			tgmsg.FileName = fmt.Sprintf("%s_%d.mp3", sci.Name, doc.Date)
+		}
 	default:
 		tgmsg.mcls = TgDocument
-		tgmsg.FileName = fmt.Sprintf("%s_%d.pdf", sci.Name, doc.Date)
-		logs.Debug().Str("media", media.String()).Send()
+		if len(txt) > 0 {
+			tgmsg.FileName = txt + ".pdf"
+		} else {
+			tgmsg.FileName = fmt.Sprintf("%s_%d.pdf", sci.Name, doc.Date)
+		}
+		// logs.Debug().Str("media", media.String()).Send()
 	}
 
 	if ts.mhnds[tgmsg.mcls] == nil {
@@ -377,7 +448,7 @@ func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string)
 		FileReference: doc.FileReference,
 	}
 
-	return ts.fileSaveLocation(ctx, tgmsg.FileSize, savePath, location)
+	return ts.fileSaveLocation(ctx, tgmsg, savePath, location)
 }
 
 func resetSaveRetry() (int, time.Time) {
@@ -397,9 +468,8 @@ func (ts *TgSuber) checkSaveRetry(cnt int, beg time.Time) bool {
 }
 
 type fileSaveMsg struct {
-	ctx context.Context
-	// tgmsg    *TgMsg
-	filesize int64
+	ctx      context.Context
+	tgmsg    *TgMsg
 	filename string
 	location tg.InputFileLocationClass
 	resChan  chan error
@@ -407,10 +477,10 @@ type fileSaveMsg struct {
 
 var fileSaveChan = make(chan *fileSaveMsg, 200)
 
-func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filename string, location tg.InputFileLocationClass) error {
+func (ts *TgSuber) fileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass) error {
 	fsm := &fileSaveMsg{
 		ctx:      ctx,
-		filesize: filesize,
+		tgmsg:    tgmsg,
 		filename: filename,
 		location: location,
 		resChan:  make(chan error, 1),
@@ -420,30 +490,56 @@ func (ts *TgSuber) fileSaveLocation(ctx context.Context, filesize int64, filenam
 	return <-fsm.resChan
 }
 
-func (ts *TgSuber) fileSaveLoop() {
-	for fsm := range fileSaveChan {
-		fsm.resChan <- ts.doFileSaveLocation(fsm.ctx, fsm.filesize, fsm.filename, fsm.location)
+func (ts *TgSuber) fileSaveLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			logs.Warn(ctx.Err()).Msg("fileSaveLoop exit")
+			return
+		case fsm := <-fileSaveChan:
+			logs.Debug().Str("file", fsm.filename).Int("msgid", fsm.tgmsg.msg.ID).Str("from", fsm.tgmsg.From.Title).Msg("do fileSaveLocation")
+			fsm.resChan <- ts.doFileSaveLocation(fsm.ctx, fsm.tgmsg, fsm.filename, fsm.location)
+		}
 	}
 }
 
-func (ts *TgSuber) doFileSaveLocation(ctx context.Context, filesize int64, filename string, location tg.InputFileLocationClass) error {
-	// 打开本地文件
-	file, err := os.OpenFile(filename, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass) error {
+	// 检查文件是否已经存在且完整
+	if finfo, err := os.Stat(filename); err == nil {
+		if finfo.Size() >= tgmsg.FileSize {
+			logs.Debug().Str("file", filename).Int("msgid", tgmsg.msg.ID).Int64("filesize", tgmsg.FileSize).Msg("file already exists and complete")
+			return nil
+		}
+	}
+
+	dlname := filename + ".dl"
+	if finfo, err := os.Stat(dlname); err == nil {
+		if finfo.Size() >= tgmsg.FileSize {
+			logs.Debug().Str("file", filename).Int("msgid", tgmsg.msg.ID).Int64("filesize", tgmsg.FileSize).Msg("file already exists and complete")
+			return os.Rename(dlname, filename)
+		}
+	}
+
+	file, err := os.OpenFile(dlname, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
 	defer file.Close()
 
 	// 分块下载
-	const chunkSize = 512 * 1024 // 512 KB
+	const chunkSize = 64 << 10
 	offset := int64(0)
 	if finfo, err := file.Stat(); err == nil {
 		offset = finfo.Size()
 	}
 
 	api := ts.client.API()
+	filesize := tgmsg.FileSize
 	retryCnt := 0
 	retryBeg := time.Now()
+
+	logs.Debug().Str("file", filename).Int("msgid", tgmsg.msg.ID).Int64("filesize", filesize).Msg("save beg")
+
 	for {
 		// 请求文件分片
 		part, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
@@ -454,6 +550,17 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, filesize int64, filen
 		if err != nil {
 			logs.Warn(err).Str("file", filename).Int64("offset", offset).Int64("filesize", filesize).
 				Int("retry", retryCnt).Msg("get file part fail")
+
+			if tg.IsFileReferenceExpired(err) {
+				if location = ts.refreshMsg(ctx, tgmsg); location == nil {
+					return err
+				}
+				continue
+			}
+			if errors.Is(err, rpc.ErrEngineClosed) {
+				return err
+			}
+
 			if retry := ts.checkSaveRetry(retryCnt, retryBeg); retry {
 				retryCnt++
 				continue
@@ -479,9 +586,9 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, filesize int64, filen
 			logs.Debug().Str("file", filename).Str("dl.progress", calcDlProgress(offset, filesize)).Send()
 
 			// 如果不足 chunkSize 说明结束
-			if wsize < chunkSize {
-				logs.Info().Int64("dlsize", offset).Str("filename", filename).Msg("dl succ")
-				return nil
+			if wsize < chunkSize || offset >= filesize {
+				logs.Info().Int64("dlsize", offset).Int64("filesize", filesize).Str("filename", filename).Msg("dl succ")
+				return os.Rename(dlname, filename)
 			}
 		default:
 			return fmt.Errorf("unexpected type %T", v)

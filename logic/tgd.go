@@ -27,7 +27,7 @@ func TgSuberStart() {
 		WithSocks5Proxy(TGCfg.socks5).
 		WithRetryRule(TGCfg.maxSaveRetryCnt, TGCfg.maxSaveRetrySecond).
 		WithSession(TGCfg.sessionPath, TGCfg.f2apwd, waitLoginCode)
-	// WithHistoryMsgCnt(2).
+		// WithHistoryMsgCnt(16).
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
 		return doDownload(Tgs, tg.TgAudio, msgid, tgmsg)
