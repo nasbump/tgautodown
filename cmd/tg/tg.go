@@ -515,6 +515,11 @@ func (ts *TgSuber) fileSaveLoop(ctx context.Context) {
 					retryCnt: fsm.retryCnt + 1,
 				}
 				fileSaveChan <- nfsm
+			} else {
+				logs.Trace().Int("msgid", fsm.tgmsg.msg.ID).Str("filename", fsm.filename).Msg("file save ok")
+				if fsm.done != nil {
+					fsm.done(ts, fsm.filename, fsm.tgmsg.msg.ID, fsm.tgmsg, nil)
+				}
 			}
 		}
 	}
