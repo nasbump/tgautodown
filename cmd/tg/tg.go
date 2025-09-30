@@ -33,16 +33,14 @@ func (ts *TgSuber) run(ctx context.Context, names []string) error {
 	}
 	ts.scis = cs
 
-	go ts.fileSaveLoop(ctx)
-
 	if ts.GetHistoryCnt > 0 {
 		for _, sci := range cs {
 			ts.recvHistoryMsg(ctx, &sci)
 		}
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	<-ts.gctx.Done()
+	return ts.gctx.Err()
 }
 
 func (ts *TgSuber) login(ctx context.Context) error {
@@ -355,7 +353,7 @@ func (ts *TgSuber) recvChannelPhotoMsg(ctx context.Context, msg *tg.Message, sci
 	return ts.mhnds[TgPhoto](msg.ID, &tgmsg)
 }
 
-func (ts *TgSuber) savePhoto(ctx context.Context, tgmsg *TgMsg, savePath string) error {
+func (ts *TgSuber) savePhoto(ctx context.Context, tgmsg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
 	msg := tgmsg.msg
 	// sci := tgmsg.From
 
@@ -369,7 +367,7 @@ func (ts *TgSuber) savePhoto(ctx context.Context, tgmsg *TgMsg, savePath string)
 		ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
 	}
 
-	return ts.fileSaveLocation(ctx, tgmsg, savePath, location)
+	return ts.fileSaveLocation(ctx, tgmsg, savePath, location, done)
 }
 
 func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
@@ -436,7 +434,7 @@ func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci
 	return ts.mhnds[tgmsg.mcls](msg.ID, &tgmsg)
 }
 
-func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string) error {
+func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
 	msg := tgmsg.msg
 	media := msg.Media.(*tg.MessageMediaDocument)
 	doc := media.Document.(*tg.Document)
@@ -448,7 +446,7 @@ func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string)
 		FileReference: doc.FileReference,
 	}
 
-	return ts.fileSaveLocation(ctx, tgmsg, savePath, location)
+	return ts.fileSaveLocation(ctx, tgmsg, savePath, location, done)
 }
 
 func resetSaveRetry() (int, time.Time) {
@@ -472,33 +470,52 @@ type fileSaveMsg struct {
 	tgmsg    *TgMsg
 	filename string
 	location tg.InputFileLocationClass
-	resChan  chan error
+	done     TgOnSaveDoneHnd
+	retryCnt int
 }
 
 var fileSaveChan = make(chan *fileSaveMsg, 200)
 
-func (ts *TgSuber) fileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass) error {
+func (ts *TgSuber) fileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass, done TgOnSaveDoneHnd) error {
 	fsm := &fileSaveMsg{
 		ctx:      ctx,
 		tgmsg:    tgmsg,
 		filename: filename,
 		location: location,
-		resChan:  make(chan error, 1),
+		done:     done,
 	}
 
 	fileSaveChan <- fsm
-	return <-fsm.resChan
+	return nil
 }
 
 func (ts *TgSuber) fileSaveLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logs.Warn(ctx.Err()).Msg("fileSaveLoop exit")
+			logs.Debug().Msg("fileSaveLoop exit")
 			return
 		case fsm := <-fileSaveChan:
-			logs.Debug().Str("file", fsm.filename).Int("msgid", fsm.tgmsg.msg.ID).Str("from", fsm.tgmsg.From.Title).Msg("do fileSaveLocation")
-			fsm.resChan <- ts.doFileSaveLocation(fsm.ctx, fsm.tgmsg, fsm.filename, fsm.location)
+			err := ts.doFileSaveLocation(fsm.ctx, fsm.tgmsg, fsm.filename, fsm.location)
+			if err != nil {
+				if fsm.retryCnt+1 > ts.MaxSaveRetryCnt {
+					logs.Error(err).Int("msgid", fsm.tgmsg.msg.ID).Str("filename", fsm.filename).
+						Int("retry", fsm.retryCnt).Msg("too many retry times")
+					if fsm.done != nil {
+						fsm.done(ts, fsm.filename, fsm.tgmsg.msg.ID, fsm.tgmsg, err)
+					}
+					continue
+				}
+				nfsm := &fileSaveMsg{
+					ctx:      context.Background(),
+					tgmsg:    fsm.tgmsg,
+					filename: fsm.filename,
+					location: fsm.location,
+					done:     fsm.done,
+					retryCnt: fsm.retryCnt + 1,
+				}
+				fileSaveChan <- nfsm
+			}
 		}
 	}
 }
@@ -558,12 +575,18 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 				continue
 			}
 			if errors.Is(err, rpc.ErrEngineClosed) {
+				ts.gctxCancel() // 返回并重新登陆
 				return err
 			}
 
 			if retry := ts.checkSaveRetry(retryCnt, retryBeg); retry {
 				retryCnt++
 				continue
+			}
+
+			if strings.Contains(err.Error(), "intermediate") {
+				ts.gctxCancel()
+				return rpc.ErrEngineClosed
 			}
 			return err
 		}

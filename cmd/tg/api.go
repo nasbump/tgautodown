@@ -68,11 +68,14 @@ type TgSuber struct {
 	scis         map[int64]SubChannelInfo
 	mhnds        map[TgMsgClass]TgMsgHnd
 	status       int
+	gctx         context.Context
+	gctxCancel   context.CancelFunc
 }
 
 type TgMsgClass string
 type TgMsgHnd func(int, *TgMsg) error
 type TgLoginCodeHnd func() string
+type TgOnSaveDoneHnd func(ts *TgSuber, savePath string, msgid int, tgmsg *TgMsg, err error)
 
 type TgMsg struct {
 	From     *SubChannelInfo
@@ -197,11 +200,18 @@ func (ts *TgSuber) Run(names []string) error {
 	ops.UpdateHandler = ts
 
 	for {
+		ts.gctx, ts.gctxCancel = context.WithCancel(context.Background())
+		go ts.fileSaveLoop(ts.gctx)
+
 		ts.client = telegram.NewClient(ts.AppID, ts.AppHash, ops)
 
-		ts.client.Run(context.Background(), func(ctx context.Context) error {
+		err := ts.client.Run(ts.gctx, func(ctx context.Context) error {
 			return ts.run(ctx, names)
 		})
+
+		ts.gctxCancel()
+		logs.Warn(err).Msg("run fail, retry...")
+		<-time.After(time.Second * 5)
 	}
 }
 
@@ -236,16 +246,16 @@ func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
 	return nil
 }
 
-func (ts *TgSuber) SaveFile(msg *TgMsg, savePath string) error {
+func (ts *TgSuber) SaveFile(msg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
 	switch msg.mcls {
 	case TgPhoto:
-		return ts.savePhoto(msg.ctx, msg, savePath)
+		return ts.savePhoto(msg.ctx, msg, savePath, done)
 	case TgVideo:
-		return ts.saveMedia(msg.ctx, msg, savePath)
+		return ts.saveMedia(msg.ctx, msg, savePath, done)
 	case TgAudio:
-		return ts.saveMedia(msg.ctx, msg, savePath)
+		return ts.saveMedia(msg.ctx, msg, savePath, done)
 	case TgDocument:
-		return ts.saveMedia(msg.ctx, msg, savePath)
+		return ts.saveMedia(msg.ctx, msg, savePath, done)
 	default:
 		return ErrMsgClsUnsupport
 	}

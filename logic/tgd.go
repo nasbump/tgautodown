@@ -67,6 +67,19 @@ func InputLoginCode(code string) {
 	codech <- code
 }
 
+func onDownloadDone(ts *tg.TgSuber, savePath string, msgid int, tgmsg *tg.TgMsg, err error) {
+	var replyMsg string
+	if err != nil {
+		replyMsg = fmt.Sprintf("下载失败: %s\n- 消息ID: %d\n- 失败原因: %s",
+			tgmsg.FileName, msgid, err.Error())
+	} else {
+		replyMsg = fmt.Sprintf("下载成功: %s\n- 消息ID: %d\n- 保存路径: %s",
+			tgmsg.FileName, msgid, savePath)
+	}
+	logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
+	ts.ReplyTo(tgmsg, replyMsg)
+}
+
 func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) error {
 	subDir := namesMap[mtype][0]
 	mtDesc := namesMap[mtype][1]
@@ -76,15 +89,13 @@ func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg)
 	logs.Debug().Msg(replyMsg)
 	ts.ReplyTo(tgmsg, replyMsg)
 	savePath := getSavePath(subDir, tgmsg.FileName)
-	if err := ts.SaveFile(tgmsg, savePath); err != nil {
+	if err := ts.SaveFile(tgmsg, savePath, onDownloadDone); err != nil {
 		replyMsg = fmt.Sprintf("下载失败: %s\n- 消息ID: %d\n- 失败原因: %s",
 			tgmsg.FileName, msgid, err.Error())
-	} else {
-		replyMsg = fmt.Sprintf("下载成功: %s\n- 消息ID: %d\n- 保存路径: %s",
-			tgmsg.FileName, msgid, savePath)
+		logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
+		return ts.ReplyTo(tgmsg, replyMsg)
 	}
-	logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
-	return ts.ReplyTo(tgmsg, replyMsg)
+	return nil
 }
 
 func getSavePath(mtype, filename string) string {
