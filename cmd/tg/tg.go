@@ -287,6 +287,11 @@ func (ts *TgSuber) recvChannelNoteMsg(ctx context.Context, msg *tg.Message, sci 
 		return nil
 	}
 
+	if sci.chType == ChTelegramService {
+		logs.Warn(nil).Int("msgid", msg.ID).Str("msg", msg.Message).Str("from", sci.Title).Msg("tg service")
+		return nil
+	}
+
 	if ts.mhnds[TgNote] == nil {
 		logs.Trace().Int("msgid", msg.ID).Msg("no note.handler")
 		return nil

@@ -76,6 +76,12 @@ func (ts *TgSuber) getSubChannel(peer tg.PeerClass) *SubChannelInfo {
 		chid = p.ChatID
 	case *tg.PeerChannel:
 		chid = p.ChannelID
+	case *tg.PeerUser:
+		if p.UserID == 777000 { // 官方通知
+			return ts.checkAndGetOfficalInfo(p)
+		}
+		logs.Trace().Int64("userid", p.UserID).Msg("private chat")
+		return nil
 	default:
 		logs.Warn(nil).Str("peer", peer.TypeName()).Msg("unknown peer")
 		return nil
@@ -87,4 +93,37 @@ func (ts *TgSuber) getSubChannel(peer tg.PeerClass) *SubChannelInfo {
 		}
 	}
 	return nil
+}
+
+func (ts *TgSuber) checkAndGetOfficalInfo(u *tg.PeerUser) *SubChannelInfo {
+	userFull, err := ts.client.API().UsersGetFullUser(ts.gctx, &tg.InputUser{
+		UserID: u.UserID,
+	})
+	if err != nil {
+		logs.Error(err).Int64("userid", u.UserID).Msg("GetFullUser error")
+		return nil
+	}
+
+	// userFull 包含完整信息，包括 profile, bio 等
+	user, ok := userFull.Users[0].(*tg.User)
+	if !ok {
+		logs.Warn(nil).Int64("userid", u.UserID).Msg("GetFullUser error")
+		return nil
+	}
+
+	logs.Info().Int64("userid", user.ID).
+		Int64("accesshash", user.AccessHash).
+		Str("username", user.Username).
+		Str("firstname", user.FirstName).
+		Str("lastname", user.LastName).
+		Bool("verify", user.Verified).Msg("get user info")
+
+	return &SubChannelInfo{
+		AccessHash: user.AccessHash,
+		ChannelID:  user.ID,
+		Name:       user.LastName,
+		Pts:        0,
+		Title:      user.FirstName,
+		chType:     ChTelegramService,
+	}
 }

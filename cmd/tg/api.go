@@ -37,6 +37,7 @@ var (
 const (
 	ChChannel int = iota
 	ChGroup
+	ChTelegramService
 )
 
 type SubChannelInfo struct {
