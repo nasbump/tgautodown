@@ -211,7 +211,17 @@ func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
 func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLocationClass {
 	api := ts.client.API()
 
-	fresh, err := api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}})
+	// 对于频道和超级组：使用 ChannelsGetMessages
+	fresh, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+		Channel: &tg.InputChannel{
+			ChannelID:  tgmsg.From.ChannelID,
+			AccessHash: tgmsg.From.AccessHash,
+		},
+		ID: []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}},
+	})
+
+	// 对于普通群或私聊：使用 MessagesGetMessages
+	// fresh, err := api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}})
 	if err != nil {
 		logs.Warn(err).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Msg("refresh fail")
 		return nil
@@ -236,9 +246,16 @@ func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLoc
 
 	}
 
+	msg := tgmsg.msg
+	if msg.Media == nil {
+		logs.Warn(nil).Int("msgid", tgmsg.msg.ID).Str("mcls", string(tgmsg.mcls)).Msg("no media")
+		return nil
+	}
+
+	logs.Info().Str("channel", tgmsg.From.Name).Str("mcls", string(tgmsg.mcls)).Int("msgid", tgmsg.msg.ID).Msg("refresh file location")
+
 	switch tgmsg.mcls {
 	case TgPhoto:
-		msg := tgmsg.msg
 		media := msg.Media.(*tg.MessageMediaPhoto)
 		photo := media.Photo.(*tg.Photo)
 		return &tg.InputPhotoFileLocation{
@@ -248,7 +265,6 @@ func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLoc
 			ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
 		}
 	default:
-		msg := tgmsg.msg
 		media := msg.Media.(*tg.MessageMediaDocument)
 		doc := media.Document.(*tg.Document)
 		return &tg.InputDocumentFileLocation{
