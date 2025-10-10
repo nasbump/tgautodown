@@ -570,7 +570,7 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 	defer file.Close()
 
 	// 分块下载
-	const chunkSize = 64 << 10
+	const chunkSize = 512 << 10
 	offset := int64(0)
 	if finfo, err := file.Stat(); err == nil {
 		offset = finfo.Size()
