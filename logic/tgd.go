@@ -24,10 +24,12 @@ var namesMap = map[tg.TgMsgClass][]string{
 
 func TgSuberStart() {
 	Tgs = tg.NewTG(TGCfg.AppID, TGCfg.AppHash, TGCfg.Phone).
-		WithSocks5Proxy(TGCfg.socks5).
-		WithRetryRule(TGCfg.maxSaveRetryCnt, TGCfg.maxSaveRetrySecond).
-		WithSession(TGCfg.sessionPath, TGCfg.f2apwd, waitLoginCode)
-		// WithHistoryMsgCnt(16).
+		WithSocks5Proxy(TGCfg.Proxy).
+		WithRetryRule(TGCfg.RetryCnt, TGCfg.RetrySec).
+		WithMaxDownload(TGCfg.MaxDl).
+		WithTaskStore(filepath.Join(TGCfg.CfgDir, "tasks.json")).
+		WithSession(TGCfg.sessionPath, TGCfg.F2A, waitLoginCode)
+	// WithHistoryMsgCnt(16).
 
 	Tgs.WithMsgHandle(tg.TgAudio, func(msgid int, tgmsg *tg.TgMsg) error {
 		return doDownload(Tgs, tg.TgAudio, msgid, tgmsg)
@@ -42,6 +44,13 @@ func TgSuberStart() {
 		return doDownload(Tgs, tg.TgPhoto, msgid, tgmsg)
 	})
 	Tgs.WithMsgHandle(tg.TgNote, func(msgid int, tgmsg *tg.TgMsg) error {
+		if strings.HasPrefix(strings.TrimSpace(tgmsg.Text), "/") {
+			if tgmsg.From == nil || !tgmsg.From.SlashCmd {
+				logs.Debug().Int("msgid", msgid).Msg("slash command disabled")
+				return nil
+			}
+			return handleCommand(Tgs, msgid, tgmsg)
+		}
 		if strings.HasPrefix(strings.ToLower(tgmsg.Text), "magnet:?") {
 			return downloadMagnet(Tgs, "bt", msgid, tgmsg)
 		} else {
@@ -49,7 +58,7 @@ func TgSuberStart() {
 		}
 	})
 
-	Tgs.Run(TGCfg.channelNames)
+	Tgs.Run(GetChannels())
 }
 
 var codech chan string
@@ -70,11 +79,11 @@ func InputLoginCode(code string) {
 func onDownloadDone(ts *tg.TgSuber, savePath string, msgid int, tgmsg *tg.TgMsg, err error) {
 	var replyMsg string
 	if err != nil {
-		replyMsg = fmt.Sprintf("下载失败: %s\n- 消息ID: %d\n- 失败原因: %s",
-			tgmsg.FileName, msgid, err.Error())
+		replyMsg = fmt.Sprintf("下载失败: %s\n- 任务ID: %d\n- 消息ID: %d\n- 失败原因: %s",
+			tgmsg.FileName, tgmsg.TaskID, msgid, err.Error())
 	} else {
-		replyMsg = fmt.Sprintf("下载成功: %s\n- 消息ID: %d\n- 保存路径: %s",
-			tgmsg.FileName, msgid, savePath)
+		replyMsg = fmt.Sprintf("下载成功: %s\n- 任务ID: %d\n- 消息ID: %d\n- 保存路径: %s",
+			tgmsg.FileName, tgmsg.TaskID, msgid, savePath)
 	}
 	logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
 	ts.ReplyTo(tgmsg, replyMsg)
@@ -82,20 +91,21 @@ func onDownloadDone(ts *tg.TgSuber, savePath string, msgid int, tgmsg *tg.TgMsg,
 
 func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) error {
 	subDir := namesMap[mtype][0]
-	mtDesc := namesMap[mtype][1]
-
-	replyMsg := fmt.Sprintf("正在下载%s: %s\n- 文件大小: %s\n- 消息ID: %d",
-		mtDesc, tgmsg.FileName, sizeInt2Readable(tgmsg.FileSize), msgid)
-	logs.Debug().Msg(replyMsg)
-	ts.ReplyTo(tgmsg, replyMsg)
 	savePath := getSavePath(subDir, tgmsg.FileName)
-	if err := ts.SaveFile(tgmsg, savePath, onDownloadDone); err != nil {
-		replyMsg = fmt.Sprintf("下载失败: %s\n- 消息ID: %d\n- 失败原因: %s",
+
+	taskID, err := ts.SaveFile(tgmsg, savePath, onDownloadDone)
+	if err != nil {
+		replyMsg := fmt.Sprintf("下载失败: %s\n- 消息ID: %d\n- 失败原因: %s",
 			tgmsg.FileName, msgid, err.Error())
 		logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
 		return ts.ReplyTo(tgmsg, replyMsg)
 	}
-	return nil
+
+	mtDesc := namesMap[mtype][1]
+	replyMsg := fmt.Sprintf("%s已加入下载队列: %s\n- 任务ID: %d\n- 文件大小: %s\n- 消息ID: %d",
+		mtDesc, tgmsg.FileName, taskID, sizeInt2Readable(tgmsg.FileSize), msgid)
+	logs.Debug().Str("from", tgmsg.From.Title).Msg(replyMsg)
+	return ts.ReplyTo(tgmsg, replyMsg)
 }
 
 func getSavePath(mtype, filename string) string {

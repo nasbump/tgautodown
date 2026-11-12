@@ -21,9 +21,12 @@ func init() {
 }
 
 func XmUsage() {
-	xmDefaultUsage(os.Args[0])
+	xmDefaultUsage(os.Args[0], 2)
 }
-func xmDefaultUsage(self string) {
+func XmUsageHelp() {
+	xmDefaultUsage(os.Args[0], 0)
+}
+func xmDefaultUsage(self string, code int) {
 	fmt.Printf("usage: %s options\n", self)
 	// fmt.Printf("  -logpath <path-to-logger>\n")
 	// fmt.Printf("  -loglev 1    # -1 trace, 0 debug, 1 info, 2 warn, 3 error, 5 fatal, 5 panic, 6 nolevel\n")
@@ -45,7 +48,7 @@ func xmDefaultUsage(self string) {
 			}
 		}
 	}
-	os.Exit(2)
+	os.Exit(code)
 }
 
 func xmArgVal(name string) (string, bool) {
@@ -169,17 +172,55 @@ func XmArgValInts(name string, desc string, defVal int) []int {
 func XmUsageIfHasKeys(keys ...string) {
 	for _, key := range keys {
 		if _, ok := xmArgVal(key); ok {
-			xmDefaultUsage(os.Args[0])
+			xmDefaultUsage(os.Args[0], 0)
 			return
 		}
 	}
+}
+
+// XmCheckKnownArgs 校验命令行只包含允许的选项；valued 为需要取值的选项，boolean 为开关选项。
+func XmCheckKnownArgs(valued, boolean []string) error {
+	takesVal := make(map[string]bool, len(valued))
+	for _, k := range valued {
+		takesVal[k] = true
+	}
+	noVal := make(map[string]bool, len(boolean))
+	for _, k := range boolean {
+		noVal[k] = true
+	}
+
+	argv := os.Args[1:]
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		if !strings.HasPrefix(arg, "-") {
+			return fmt.Errorf("unexpected argument: %s", arg)
+		}
+
+		name := strings.TrimLeft(arg, "-")
+		hasInlineVal := false
+		if idx := strings.IndexByte(name, '='); idx >= 0 {
+			name = name[:idx]
+			hasInlineVal = true
+		}
+
+		switch {
+		case takesVal[name]:
+			if !hasInlineVal && i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
+				i++
+			}
+		case noVal[name]:
+		default:
+			return fmt.Errorf("unknown option: %s", arg)
+		}
+	}
+	return nil
 }
 
 func XmUsageIfHasNoKeys(keys ...string) {
 	for _, key := range keys {
 		if _, ok := xmArgVal(key); !ok {
 			xmKVs[key] = xmv{def: false, miss: "[*miss*]"}
-			xmDefaultUsage(os.Args[0])
+			xmDefaultUsage(os.Args[0], 2)
 			return
 		}
 	}

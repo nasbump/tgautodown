@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"tgautodown/internal/logs"
 	"time"
 
@@ -46,7 +47,15 @@ type SubChannelInfo struct {
 	ChannelID  int64
 	AccessHash int64
 	Pts        int // 保存频道的 PTS（状态点）
+	SlashCmd   bool
 	chType     int
+}
+
+// ChannelConfig 订阅源配置：Name 为可读名称，ID 为频道用户名或带 + 的邀请码。
+type ChannelConfig struct {
+	Name     string `json:"name"`
+	ID       string `json:"id"`
+	SlashCmd bool   `json:"slashcmd"`
 }
 
 type TgSuber struct {
@@ -60,10 +69,13 @@ type TgSuber struct {
 	UserID, AccessHash  int64
 	UserPwd             *proxy.Auth
 	GetHistoryCnt       int
-	MaxSaveRetryCnt     int // 保存文件时最大重试次数
-	MaxSaveRetryTime    int // 保存文件时最大重试时长
+	MaxSaveRetryCnt     int    // 保存文件时最大重试次数
+	MaxSaveRetryTime    int    // 保存文件时最大重试时长
+	MaxDownload         int    // 同时下载任务数
+	TaskStore           string // 未完成任务落盘路径
 
 	enableTGLog  bool
+	stateMu      sync.RWMutex
 	client       *telegram.Client
 	getLoginCode TgLoginCodeHnd
 	scis         map[int64]SubChannelInfo
@@ -71,6 +83,8 @@ type TgSuber struct {
 	status       int
 	gctx         context.Context
 	gctxCancel   context.CancelFunc
+	tasks        *TaskMgr
+	tasksOnce    sync.Once
 }
 
 type TgMsgClass string
@@ -84,6 +98,9 @@ type TgMsg struct {
 	Text     string
 	FileName string
 	FileSize int64
+
+	// TaskID 由任务管理器在入队/完成时填写
+	TaskID int64
 
 	ctx   context.Context
 	msg   *tg.Message
@@ -101,11 +118,12 @@ const (
 
 func NewTG(appid int, apphash, phone string) *TgSuber {
 	ts := &TgSuber{
-		AppID:     appid,
-		AppHash:   apphash,
-		UserPhone: phone,
-		mhnds:     map[TgMsgClass]TgMsgHnd{},
-		status:    TgstatusInit,
+		AppID:       appid,
+		AppHash:     apphash,
+		UserPhone:   phone,
+		mhnds:       map[TgMsgClass]TgMsgHnd{},
+		status:      TgstatusInit,
+		MaxDownload: 1,
 	}
 	return ts
 }
@@ -127,6 +145,17 @@ func (ts *TgSuber) WithRetryRule(maxCnt, maxTime int) *TgSuber {
 }
 func (ts *TgSuber) WithHistoryMsgCnt(cnt int) *TgSuber {
 	ts.GetHistoryCnt = cnt
+	return ts
+}
+func (ts *TgSuber) WithMaxDownload(n int) *TgSuber {
+	if n < 1 {
+		n = 1
+	}
+	ts.MaxDownload = n
+	return ts
+}
+func (ts *TgSuber) WithTaskStore(path string) *TgSuber {
+	ts.TaskStore = path
 	return ts
 }
 func (ts *TgSuber) WithSocks5Proxy(addr string) *TgSuber {
@@ -163,8 +192,8 @@ func (ts *TgSuber) WithMsgHandle(mcls TgMsgClass, hnd TgMsgHnd) *TgSuber {
 	return ts
 }
 
-func (ts *TgSuber) Run(names []string) error {
-	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("phone", ts.UserPhone).Str("socks5", ts.Socks5Proxy).Strs("channel", names).Send()
+func (ts *TgSuber) Run(channels []ChannelConfig) error {
+	logs.Info().Int("appid", ts.AppID).Str("apphash", ts.AppHash).Str("phone", ts.UserPhone).Str("socks5", ts.Socks5Proxy).Strs("channel", channelIDs(channels)).Send()
 
 	ops := telegram.Options{}
 	if ts.enableTGLog {
@@ -200,20 +229,103 @@ func (ts *TgSuber) Run(names []string) error {
 
 	ops.UpdateHandler = ts
 
+	ts.taskMgr()
+
 	for {
-		ts.gctx, ts.gctxCancel = context.WithCancel(context.Background())
-		go ts.fileSaveLoop(ts.gctx)
+		gctx, gctxCancel := context.WithCancel(context.Background())
+		client := telegram.NewClient(ts.AppID, ts.AppHash, ops)
 
-		ts.client = telegram.NewClient(ts.AppID, ts.AppHash, ops)
+		ts.stateMu.Lock()
+		ts.gctx, ts.gctxCancel = gctx, gctxCancel
+		ts.client = client
+		ts.stateMu.Unlock()
 
-		err := ts.client.Run(ts.gctx, func(ctx context.Context) error {
-			return ts.run(ctx, names)
+		err := client.Run(gctx, func(ctx context.Context) error {
+			return ts.run(ctx, channels)
 		})
 
-		ts.gctxCancel()
+		ts.taskMgr().SetBaseCtx(nil)
+		gctxCancel()
+
+		ts.stateMu.Lock()
+		ts.client = nil
+		ts.stateMu.Unlock()
+
 		logs.Warn(err).Msg("run fail, retry...")
 		<-time.After(time.Second * 5)
 	}
+}
+
+func channelIDs(channels []ChannelConfig) []string {
+	ids := make([]string, 0, len(channels))
+	for _, ch := range channels {
+		ids = append(ids, ch.ID)
+	}
+	return ids
+}
+
+// taskMgr 在首次调用时创建任务管理器并恢复未完成任务。
+func (ts *TgSuber) taskMgr() *TaskMgr {
+	ts.tasksOnce.Do(func() {
+		ts.tasks = newTaskMgr(ts, ts.TaskStore, ts.MaxDownload)
+		ts.tasks.restore()
+		ts.tasks.start()
+	})
+	return ts.tasks
+}
+
+// Tasks 返回任务管理器，供命令层使用。
+func (ts *TgSuber) Tasks() *TaskMgr {
+	return ts.taskMgr()
+}
+
+func (ts *TgSuber) api() *tg.Client {
+	ts.stateMu.RLock()
+	defer ts.stateMu.RUnlock()
+	if ts.client == nil {
+		return nil
+	}
+	return ts.client.API()
+}
+
+func (ts *TgSuber) clientRef() *telegram.Client {
+	ts.stateMu.RLock()
+	defer ts.stateMu.RUnlock()
+	return ts.client
+}
+
+func (ts *TgSuber) connCtx() context.Context {
+	ts.stateMu.RLock()
+	defer ts.stateMu.RUnlock()
+	return ts.gctx
+}
+
+func (ts *TgSuber) cancelConn() {
+	ts.stateMu.RLock()
+	cancel := ts.gctxCancel
+	ts.stateMu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (ts *TgSuber) setStatus(status int) {
+	ts.stateMu.Lock()
+	ts.status = status
+	ts.stateMu.Unlock()
+}
+
+func (ts *TgSuber) setScis(scis map[int64]SubChannelInfo) {
+	ts.stateMu.Lock()
+	ts.scis = scis
+	ts.stateMu.Unlock()
+}
+
+func (ts *TgSuber) getSCI(id int64) (SubChannelInfo, bool) {
+	ts.stateMu.RLock()
+	defer ts.stateMu.RUnlock()
+	sci, ok := ts.scis[id]
+	return sci, ok
 }
 
 func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
@@ -239,7 +351,16 @@ func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
 		logs.Warn(nil).Str("title", msg.From.Title).Msg("unknown channel or group")
 		return nil
 	}
-	if _, err := ts.client.API().MessagesSendMessage(msg.ctx, req); err != nil {
+
+	ctx := ts.connCtx()
+	if ctx == nil {
+		ctx = msg.ctx
+	}
+	api := ts.api()
+	if ctx == nil || api == nil {
+		return ErrClientNotAuth
+	}
+	if _, err := api.MessagesSendMessage(ctx, req); err != nil {
 		logs.Warn(err).Str("title", msg.From.Title).Msg("reply fail")
 		return err
 	}
@@ -247,18 +368,13 @@ func (ts *TgSuber) ReplyTo(msg *TgMsg, text string) error {
 	return nil
 }
 
-func (ts *TgSuber) SaveFile(msg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
+// SaveFile 将文件下载任务加入队列，返回任务 ID。
+func (ts *TgSuber) SaveFile(msg *TgMsg, savePath string, done TgOnSaveDoneHnd) (int64, error) {
 	switch msg.mcls {
-	case TgPhoto:
-		return ts.savePhoto(msg.ctx, msg, savePath, done)
-	case TgVideo:
-		return ts.saveMedia(msg.ctx, msg, savePath, done)
-	case TgAudio:
-		return ts.saveMedia(msg.ctx, msg, savePath, done)
-	case TgDocument:
-		return ts.saveMedia(msg.ctx, msg, savePath, done)
+	case TgPhoto, TgVideo, TgAudio, TgDocument:
+		return ts.taskMgr().add(msg, savePath, done), nil
 	default:
-		return ErrMsgClsUnsupport
+		return 0, ErrMsgClsUnsupport
 	}
 }
 
@@ -279,5 +395,7 @@ func sanitizeFileName(name string) string {
 }
 
 func (ts *TgSuber) Status() int {
+	ts.stateMu.RLock()
+	defer ts.stateMu.RUnlock()
 	return ts.status
 }

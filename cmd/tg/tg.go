@@ -14,24 +14,27 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-func (ts *TgSuber) run(ctx context.Context, names []string) error {
-	ts.status = TgstatusLoging
+func (ts *TgSuber) run(ctx context.Context, channels []ChannelConfig) error {
+	ts.setStatus(TgstatusLoging)
 	if err := ts.login(ctx); err != nil {
-		ts.status = TgstatusLogFail
+		ts.setStatus(TgstatusLogFail)
 		return err
 	}
 
-	ts.status = TgstatusLogOk
+	ts.setStatus(TgstatusLogOk)
 	logs.Info().Str("firstname", ts.FirstName).Str("username", ts.UserName).
 		Int64("id", ts.UserID).Int64("accesshash", ts.AccessHash).
 		Str("phone", ts.UserPhone).Int("appid", ts.AppID).Msg("ready")
 
-	cs := ts.getChannels(ctx, names)
+	// 登录成功即可开始派发下载任务（包括重启后恢复的任务）
+	ts.taskMgr().SetBaseCtx(ctx)
+
+	cs := ts.getChannels(ctx, channels)
 	if len(cs) == 0 {
 		logs.Error(nil).Msg("no channels need subscribe")
 		return nil
 	}
-	ts.scis = cs
+	ts.setScis(cs)
 
 	if ts.GetHistoryCnt > 0 {
 		for _, sci := range cs {
@@ -39,21 +42,21 @@ func (ts *TgSuber) run(ctx context.Context, names []string) error {
 		}
 	}
 
-	<-ts.gctx.Done()
-	return ts.gctx.Err()
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 func (ts *TgSuber) login(ctx context.Context) error {
 	flow := auth.NewFlow(ts, auth.SendCodeOptions{})
 
-	tsca := ts.client.Auth()
+	tsca := ts.clientRef().Auth()
 
 	if err := tsca.IfNecessary(ctx, flow); err != nil {
 		logs.Error(err).Msg("login failed")
 		return err
 	}
 
-	self, err := ts.client.Self(ctx)
+	self, err := ts.clientRef().Self(ctx)
 	if err != nil {
 		if auth.IsUnauthorized(err) {
 			logs.Fatal(err).Msg("ErrClientNotAuth")
@@ -71,82 +74,96 @@ func (ts *TgSuber) login(ctx context.Context) error {
 	return nil
 }
 
-func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]SubChannelInfo {
+func (ts *TgSuber) getChannels(ctx context.Context, channels []ChannelConfig) map[int64]SubChannelInfo {
 	cs := map[int64]SubChannelInfo{}
 
-	api := ts.client.API()
-	for _, name := range names {
-		if after, ok := strings.CutPrefix(name, "+"); ok { // https://t.me/+sZF0XrTZVq02M2Yx
+	api := ts.api()
+	for _, chCfg := range channels {
+		id := chCfg.ID
+		// 配置了可读名称时优先使用，回执与日志中都更易读
+		name := chCfg.Name
+		if strings.TrimSpace(name) == "" {
+			name = id
+		}
+		if after, ok := strings.CutPrefix(id, "+"); ok { // https://t.me/+sZF0XrTZVq02M2Yx
 			invite, err := api.MessagesCheckChatInvite(ctx, after)
 			if err != nil {
-				logs.Warn(err).Str("name", name).Msg("check invite fail")
+				logs.Warn(err).Str("id", id).Msg("check invite fail")
 				continue
 			}
 			switch inv := invite.(type) {
 			case *tg.ChatInviteAlready:
 				if ch, ok := inv.Chat.(*tg.Channel); ok {
 					sci := SubChannelInfo{
-						Name:       after, // ch.Username, // 私有频道没有username
+						Name:       name, // 私有频道没有 username
 						Title:      ch.Title,
 						ChannelID:  ch.ID,
 						AccessHash: ch.AccessHash,
+						SlashCmd:   chCfg.SlashCmd,
 						chType:     ChChannel,
 					}
 					cs[ch.ID] = sci
-					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("private channel")
+					logs.Info().Str("id", id).Str("name", sci.Name).Int64("channelid", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("private channel")
 				} else if ch, ok := inv.Chat.(*tg.Chat); ok {
 					sci := SubChannelInfo{
-						Name:      after, // ch.Username, // 私有频道没有username
+						Name:      name,
 						Title:     ch.Title,
 						ChannelID: ch.ID,
+						SlashCmd:  chCfg.SlashCmd,
 						chType:    ChGroup,
 					}
 					cs[ch.ID] = sci
-					logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("private group")
+					logs.Info().Str("id", id).Str("name", sci.Name).Int64("channelid", sci.ChannelID).Str("title", sci.Title).Msg("private group")
 				} else {
-					logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).
+					logs.Warn(nil).Str("id", id).Str("invite.type", inv.TypeName()).
 						Str("chat.type", inv.Chat.TypeName()).Msg("unknown chat")
 				}
 			case *tg.ChatInvite: // 未加入，需要调用 MessagesImportChatInvite 加入
-				// joined, _ := api.MessagesImportChatInvite(ctx, name)
-				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).
+				// joined, _ := api.MessagesImportChatInvite(ctx, id)
+				logs.Warn(nil).Str("id", id).Str("invite.type", inv.TypeName()).
 					Bool("Channel", inv.Channel).
 					Bool("Public", inv.Public).Msg("not in channel")
 			default:
-				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).Msg("unknown invite")
+				logs.Warn(nil).Str("id", id).Str("invite.type", inv.TypeName()).Msg("unknown invite")
 			}
 		} else {
 			res, err := api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{
-				Username: name,
+				Username: id,
 			})
 			if err != nil {
-				logs.Warn(err).Str("name", name).Msg("resolve fail")
+				logs.Warn(err).Str("id", id).Msg("resolve fail")
+				continue
+			}
+			if len(res.Chats) == 0 {
+				logs.Warn(nil).Str("id", id).Msg("resolve fail: no chats")
 				continue
 			}
 
 			inv := res.Chats[0]
 			if ch, ok := inv.(*tg.Channel); ok {
 				sci := SubChannelInfo{
-					Name:       ch.Username,
+					Name:       name,
 					Title:      ch.Title,
 					ChannelID:  ch.ID,
 					AccessHash: ch.AccessHash,
+					SlashCmd:   chCfg.SlashCmd,
 					chType:     ChChannel,
 				}
 
 				cs[ch.ID] = sci
-				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("public chanel")
+				logs.Info().Str("id", id).Str("name", sci.Name).Int64("channelid", sci.ChannelID).Int64("hash", sci.AccessHash).Str("title", sci.Title).Msg("public chanel")
 			} else if ch, ok := inv.(*tg.Chat); ok {
 				sci := SubChannelInfo{
 					Name:      name,
 					Title:     ch.Title,
 					ChannelID: ch.ID,
+					SlashCmd:  chCfg.SlashCmd,
 					chType:    ChGroup,
 				}
 				cs[ch.ID] = sci
-				logs.Info().Str("name", name).Int64("id", sci.ChannelID).Str("title", sci.Title).Msg("public group")
+				logs.Info().Str("id", id).Str("name", sci.Name).Int64("channelid", sci.ChannelID).Str("title", sci.Title).Msg("public group")
 			} else {
-				logs.Warn(nil).Str("name", name).Str("invite.type", inv.TypeName()).Msg("unknown invite")
+				logs.Warn(nil).Str("id", id).Str("invite.type", inv.TypeName()).Msg("unknown invite")
 			}
 		}
 	}
@@ -154,7 +171,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, names []string) map[int64]Su
 }
 
 func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
-	api := ts.client.API()
+	api := ts.api()
 
 	req := &tg.MessagesGetHistoryRequest{
 		Limit: ts.GetHistoryCnt,
@@ -208,45 +225,63 @@ func (ts *TgSuber) recvHistoryMsg(ctx context.Context, sci *SubChannelInfo) {
 	}
 }
 
+// refreshMsg 重新获取消息以刷新 FileReference；返回最新的文件下载位置。
 func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLocationClass {
-	api := ts.client.API()
+	if tgmsg.From == nil || tgmsg.msg == nil {
+		logs.Warn(nil).Msg("refresh fail: no msg info")
+		return nil
+	}
 
-	// 对于频道和超级组：使用 ChannelsGetMessages
-	fresh, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-		Channel: &tg.InputChannel{
-			ChannelID:  tgmsg.From.ChannelID,
-			AccessHash: tgmsg.From.AccessHash,
-		},
-		ID: []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}},
-	})
+	api := ts.api()
+	if api == nil {
+		logs.Warn(nil).Msg("refresh fail: client not ready")
+		return nil
+	}
+	ids := []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}}
 
-	// 对于普通群或私聊：使用 MessagesGetMessages
-	// fresh, err := api.MessagesGetMessages(ctx, []tg.InputMessageClass{&tg.InputMessageID{ID: tgmsg.msg.ID}})
+	var fresh tg.MessagesMessagesClass
+	var err error
+	switch tgmsg.From.chType {
+	case ChChannel:
+		fresh, err = api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  tgmsg.From.ChannelID,
+				AccessHash: tgmsg.From.AccessHash,
+			},
+			ID: ids,
+		})
+	default:
+		// 普通群和私聊使用 MessagesGetMessages
+		fresh, err = api.MessagesGetMessages(ctx, ids)
+	}
 	if err != nil {
 		logs.Warn(err).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Msg("refresh fail")
 		return nil
 	}
 
-	switch msgs := fresh.(type) {
+	var msgs []tg.MessageClass
+	switch m := fresh.(type) {
 	case *tg.MessagesMessages:
-		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
-			tgmsg.msg = newMsg
-		}
+		msgs = m.Messages
 	case *tg.MessagesChannelMessages:
-		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
-			tgmsg.msg = newMsg
-		}
+		msgs = m.Messages
 	case *tg.MessagesMessagesSlice:
-		if newMsg, ok := msgs.Messages[0].(*tg.Message); ok {
-			tgmsg.msg = newMsg
-		}
+		msgs = m.Messages
 	default:
-		logs.Warn(nil).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Str("fresh", msgs.TypeName()).Msg("unknown fresh")
+		logs.Warn(nil).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Str("fresh", fresh.TypeName()).Msg("unknown fresh")
 		return nil
-
 	}
 
-	msg := tgmsg.msg
+	if len(msgs) == 0 {
+		logs.Warn(nil).Str("channel", tgmsg.From.Name).Int("msgid", tgmsg.msg.ID).Msg("refresh fail: empty messages")
+		return nil
+	}
+	msg, ok := msgs[0].(*tg.Message)
+	if !ok {
+		logs.Warn(nil).Int("msgid", tgmsg.msg.ID).Str("msg.type", msgs[0].TypeName()).Msg("refresh fail: not message")
+		return nil
+	}
+
 	if msg.Media == nil {
 		logs.Warn(nil).Int("msgid", tgmsg.msg.ID).Str("mcls", string(tgmsg.mcls)).Msg("no media")
 		return nil
@@ -256,8 +291,16 @@ func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLoc
 
 	switch tgmsg.mcls {
 	case TgPhoto:
-		media := msg.Media.(*tg.MessageMediaPhoto)
-		photo := media.Photo.(*tg.Photo)
+		media, ok := msg.Media.(*tg.MessageMediaPhoto)
+		if !ok {
+			logs.Warn(nil).Int("msgid", msg.ID).Str("media", msg.Media.TypeName()).Msg("not photo media")
+			return nil
+		}
+		photo, ok := media.Photo.(*tg.Photo)
+		if !ok {
+			logs.Warn(nil).Int("msgid", msg.ID).Msg("not photo")
+			return nil
+		}
 		return &tg.InputPhotoFileLocation{
 			ID:            photo.ID,
 			AccessHash:    photo.AccessHash,
@@ -265,8 +308,16 @@ func (ts *TgSuber) refreshMsg(ctx context.Context, tgmsg *TgMsg) tg.InputFileLoc
 			ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
 		}
 	default:
-		media := msg.Media.(*tg.MessageMediaDocument)
-		doc := media.Document.(*tg.Document)
+		media, ok := msg.Media.(*tg.MessageMediaDocument)
+		if !ok {
+			logs.Warn(nil).Int("msgid", msg.ID).Str("media", msg.Media.TypeName()).Msg("not document media")
+			return nil
+		}
+		doc, ok := media.Document.(*tg.Document)
+		if !ok {
+			logs.Warn(nil).Int("msgid", msg.ID).Msg("not document")
+			return nil
+		}
 		return &tg.InputDocumentFileLocation{
 			ID:            doc.ID,
 			AccessHash:    doc.AccessHash,
@@ -374,23 +425,6 @@ func (ts *TgSuber) recvChannelPhotoMsg(ctx context.Context, msg *tg.Message, sci
 	return ts.mhnds[TgPhoto](msg.ID, &tgmsg)
 }
 
-func (ts *TgSuber) savePhoto(ctx context.Context, tgmsg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
-	msg := tgmsg.msg
-	// sci := tgmsg.From
-
-	media := msg.Media.(*tg.MessageMediaPhoto)
-	photo := media.Photo.(*tg.Photo)
-
-	location := &tg.InputPhotoFileLocation{
-		ID:            photo.ID,
-		AccessHash:    photo.AccessHash,
-		FileReference: photo.FileReference,
-		ThumbSize:     tgmsg.ptype, // 可选缩略图大小 ("s", "m", "x", "y", "w", "z" 等)
-	}
-
-	return ts.fileSaveLocation(ctx, tgmsg, savePath, location, done)
-}
-
 func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci *SubChannelInfo) error {
 	media := msg.Media.(*tg.MessageMediaDocument)
 	doc, ok := media.Document.(*tg.Document)
@@ -455,19 +489,69 @@ func (ts *TgSuber) recvChannelMediaMsg(ctx context.Context, msg *tg.Message, sci
 	return ts.mhnds[tgmsg.mcls](msg.ID, &tgmsg)
 }
 
-func (ts *TgSuber) saveMedia(ctx context.Context, tgmsg *TgMsg, savePath string, done TgOnSaveDoneHnd) error {
-	msg := tgmsg.msg
-	media := msg.Media.(*tg.MessageMediaDocument)
-	doc := media.Document.(*tg.Document)
-
-	// 构造下载位置
-	location := &tg.InputDocumentFileLocation{
-		ID:            doc.ID,
-		AccessHash:    doc.AccessHash,
-		FileReference: doc.FileReference,
+// downloadTask 执行单个下载任务：先刷新 FileReference，再传输文件。
+func (ts *TgSuber) downloadTask(t *Task) error {
+	tgmsg := t.tgmsg
+	if tgmsg == nil {
+		return fmt.Errorf("task %d has no msg", t.ID)
 	}
 
-	return ts.fileSaveLocation(ctx, tgmsg, savePath, location, done)
+	ctx := t.ctx
+	if ctx == nil {
+		ctx = ts.connCtx()
+	}
+	if ctx == nil {
+		return ErrClientNotAuth
+	}
+	tgmsg.ctx = ctx
+
+	api := ts.api()
+	if api == nil {
+		return ErrClientNotAuth
+	}
+
+	location := ts.refreshMsg(ctx, tgmsg)
+	if location == nil {
+		if tgmsg.msg == nil || tgmsg.msg.Media == nil {
+			return fmt.Errorf("task %d: refresh file location fail", t.ID)
+		}
+		// 刷新失败时退回消息中自带的 location
+		switch tgmsg.mcls {
+		case TgPhoto:
+			media, ok := tgmsg.msg.Media.(*tg.MessageMediaPhoto)
+			if !ok {
+				return fmt.Errorf("task %d: not photo media", t.ID)
+			}
+			photo, ok := media.Photo.(*tg.Photo)
+			if !ok {
+				return fmt.Errorf("task %d: not photo", t.ID)
+			}
+			location = &tg.InputPhotoFileLocation{
+				ID:            photo.ID,
+				AccessHash:    photo.AccessHash,
+				FileReference: photo.FileReference,
+				ThumbSize:     tgmsg.ptype,
+			}
+		default:
+			media, ok := tgmsg.msg.Media.(*tg.MessageMediaDocument)
+			if !ok {
+				return fmt.Errorf("task %d: not document media", t.ID)
+			}
+			doc, ok := media.Document.(*tg.Document)
+			if !ok {
+				return fmt.Errorf("task %d: not document", t.ID)
+			}
+			location = &tg.InputDocumentFileLocation{
+				ID:            doc.ID,
+				AccessHash:    doc.AccessHash,
+				FileReference: doc.FileReference,
+			}
+		}
+	}
+
+	return ts.doFileSaveLocation(ctx, tgmsg, t.SavePath, location, func(done, _ int64) {
+		t.Downloaded.Store(done)
+	})
 }
 
 func resetSaveRetry() (int, time.Time) {
@@ -486,67 +570,7 @@ func (ts *TgSuber) checkSaveRetry(cnt int, beg time.Time) bool {
 	return true
 }
 
-type fileSaveMsg struct {
-	ctx      context.Context
-	tgmsg    *TgMsg
-	filename string
-	location tg.InputFileLocationClass
-	done     TgOnSaveDoneHnd
-	retryCnt int
-}
-
-var fileSaveChan = make(chan *fileSaveMsg, 200)
-
-func (ts *TgSuber) fileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass, done TgOnSaveDoneHnd) error {
-	fsm := &fileSaveMsg{
-		ctx:      ctx,
-		tgmsg:    tgmsg,
-		filename: filename,
-		location: location,
-		done:     done,
-	}
-
-	fileSaveChan <- fsm
-	return nil
-}
-
-func (ts *TgSuber) fileSaveLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			logs.Debug().Msg("fileSaveLoop exit")
-			return
-		case fsm := <-fileSaveChan:
-			err := ts.doFileSaveLocation(fsm.ctx, fsm.tgmsg, fsm.filename, fsm.location)
-			if err != nil {
-				if fsm.retryCnt+1 > ts.MaxSaveRetryCnt {
-					logs.Error(err).Int("msgid", fsm.tgmsg.msg.ID).Str("filename", fsm.filename).
-						Int("retry", fsm.retryCnt).Msg("too many retry times")
-					if fsm.done != nil {
-						fsm.done(ts, fsm.filename, fsm.tgmsg.msg.ID, fsm.tgmsg, err)
-					}
-					continue
-				}
-				nfsm := &fileSaveMsg{
-					ctx:      context.Background(),
-					tgmsg:    fsm.tgmsg,
-					filename: fsm.filename,
-					location: fsm.location,
-					done:     fsm.done,
-					retryCnt: fsm.retryCnt + 1,
-				}
-				fileSaveChan <- nfsm
-			} else {
-				logs.Trace().Int("msgid", fsm.tgmsg.msg.ID).Str("filename", fsm.filename).Msg("file save ok")
-				if fsm.done != nil {
-					fsm.done(ts, fsm.filename, fsm.tgmsg.msg.ID, fsm.tgmsg, nil)
-				}
-			}
-		}
-	}
-}
-
-func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass) error {
+func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filename string, location tg.InputFileLocationClass, onProgress func(done, total int64)) error {
 	// 检查文件是否已经存在且完整
 	if finfo, err := os.Stat(filename); err == nil {
 		if finfo.Size() >= tgmsg.FileSize {
@@ -575,15 +599,25 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 	if finfo, err := file.Stat(); err == nil {
 		offset = finfo.Size()
 	}
+	if onProgress != nil {
+		onProgress(offset, tgmsg.FileSize)
+	}
 
-	api := ts.client.API()
+	api := ts.api()
+	if api == nil {
+		return ErrClientNotAuth
+	}
 	filesize := tgmsg.FileSize
 	retryCnt := 0
 	retryBeg := time.Now()
 
-	logs.Debug().Str("file", filename).Int("msgid", tgmsg.msg.ID).Int64("filesize", filesize).Msg("save beg")
+	logs.Debug().Str("file", filename).Int("msgid", tgmsg.msg.ID).Int64("offset", offset).Int64("filesize", filesize).Msg("save beg")
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		// 请求文件分片
 		part, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
 			Location: location,
@@ -591,6 +625,10 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 			Limit:    chunkSize,
 		})
 		if err != nil {
+			if ctx.Err() != nil { // 暂停/删除/断连：保留断点直接返回
+				return ctx.Err()
+			}
+
 			logs.Warn(err).Str("file", filename).Int64("offset", offset).Int64("filesize", filesize).
 				Int("retry", retryCnt).Msg("get file part fail")
 
@@ -601,7 +639,7 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 				continue
 			}
 			if errors.Is(err, rpc.ErrEngineClosed) {
-				ts.gctxCancel() // 返回并重新登陆
+				ts.cancelConn() // 返回并重新登陆
 				return err
 			}
 
@@ -611,7 +649,7 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 			}
 
 			if strings.Contains(err.Error(), "intermediate") {
-				ts.gctxCancel()
+				ts.cancelConn()
 				return rpc.ErrEngineClosed
 			}
 			return err
@@ -625,12 +663,18 @@ func (ts *TgSuber) doFileSaveLocation(ctx context.Context, tgmsg *TgMsg, filenam
 			// 写入数据
 			vsize := len(v.Bytes)
 			wsize, err := file.Write(v.Bytes)
-			if err != nil || vsize != wsize {
+			if err != nil {
 				logs.Warn(err).Str("file", filename).Int("vsize", vsize).Int("wsize", wsize).Msg("write file fail")
 				return fmt.Errorf("write file: %w", err)
 			}
+			if vsize != wsize {
+				return fmt.Errorf("write file: short write %d/%d", wsize, vsize)
+			}
 
 			offset += int64(wsize)
+			if onProgress != nil {
+				onProgress(offset, filesize)
+			}
 
 			logs.Debug().Str("file", filename).Str("dl.progress", calcDlProgress(offset, filesize)).Send()
 

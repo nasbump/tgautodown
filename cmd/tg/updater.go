@@ -87,16 +87,20 @@ func (ts *TgSuber) getSubChannel(peer tg.PeerClass) *SubChannelInfo {
 		return nil
 	}
 
-	if ts.scis != nil {
-		if sci, ok := ts.scis[chid]; ok {
-			return &sci
-		}
+	if sci, ok := ts.getSCI(chid); ok {
+		return &sci
 	}
 	return nil
 }
 
 func (ts *TgSuber) checkAndGetOfficalInfo(u *tg.PeerUser) *SubChannelInfo {
-	userFull, err := ts.client.API().UsersGetFullUser(ts.gctx, &tg.InputUser{
+	api := ts.api()
+	ctx := ts.connCtx()
+	if api == nil || ctx == nil {
+		logs.Warn(nil).Int64("userid", u.UserID).Msg("client not ready")
+		return nil
+	}
+	userFull, err := api.UsersGetFullUser(ctx, &tg.InputUser{
 		UserID: u.UserID,
 	})
 	if err != nil {

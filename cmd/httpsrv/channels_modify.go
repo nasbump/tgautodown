@@ -3,6 +3,7 @@ package httpsrv
 import (
 	"encoding/json"
 	"net/http"
+	"tgautodown/cmd/tg"
 	"tgautodown/internal/logs"
 	"tgautodown/logic"
 
@@ -25,15 +26,14 @@ func HandleChannelsModify(w http.ResponseWriter, r *http.Request) {
 	rid := ulid.Make().String()
 	logs.Info().Rid(rid).Str("path", r.URL.Path).Msg("Channels modify request")
 
-	var channels []string
+	var channels []tg.ChannelConfig
 	if err := json.NewDecoder(r.Body).Decode(&channels); err != nil {
 		logs.Warn(err).Rid(rid).Msg("Failed to decode channels modify request")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// 更新频道列表
-	// logic.TGCfg.ChannelNames = channels
+	logic.SetChannels(channels)
 	logic.SaveCfg()
 
 	response := ChannelsModifyResponse{
