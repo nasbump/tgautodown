@@ -91,6 +91,10 @@ func normalizeChannels(channels []tg.ChannelConfig) []tg.ChannelConfig {
 	for _, ch := range channels {
 		ch.ID = strings.TrimSpace(ch.ID)
 		ch.Name = strings.TrimSpace(ch.Name)
+		ch.SaveDir = strings.TrimSpace(ch.SaveDir)
+		if ch.SaveDir != "" {
+			ch.SaveDir = filepath.Clean(ch.SaveDir)
+		}
 		if ch.ID == "" {
 			continue
 		}

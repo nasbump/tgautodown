@@ -100,6 +100,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, channels []ChannelConfig) ma
 						ChannelID:  ch.ID,
 						AccessHash: ch.AccessHash,
 						SlashCmd:   chCfg.SlashCmd,
+						SaveDir:    chCfg.SaveDir,
 						chType:     ChChannel,
 					}
 					cs[ch.ID] = sci
@@ -110,6 +111,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, channels []ChannelConfig) ma
 						Title:     ch.Title,
 						ChannelID: ch.ID,
 						SlashCmd:  chCfg.SlashCmd,
+						SaveDir:   chCfg.SaveDir,
 						chType:    ChGroup,
 					}
 					cs[ch.ID] = sci
@@ -147,6 +149,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, channels []ChannelConfig) ma
 					ChannelID:  ch.ID,
 					AccessHash: ch.AccessHash,
 					SlashCmd:   chCfg.SlashCmd,
+					SaveDir:    chCfg.SaveDir,
 					chType:     ChChannel,
 				}
 
@@ -158,6 +161,7 @@ func (ts *TgSuber) getChannels(ctx context.Context, channels []ChannelConfig) ma
 					Title:     ch.Title,
 					ChannelID: ch.ID,
 					SlashCmd:  chCfg.SlashCmd,
+					SaveDir:   chCfg.SaveDir,
 					chType:    ChGroup,
 				}
 				cs[ch.ID] = sci

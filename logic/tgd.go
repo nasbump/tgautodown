@@ -91,7 +91,7 @@ func onDownloadDone(ts *tg.TgSuber, savePath string, msgid int, tgmsg *tg.TgMsg,
 
 func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) error {
 	subDir := namesMap[mtype][0]
-	savePath := getSavePath(subDir, tgmsg.FileName)
+	savePath := getSavePath(tgmsg, subDir, tgmsg.FileName)
 
 	taskID, err := ts.SaveFile(tgmsg, savePath, onDownloadDone)
 	if err != nil {
@@ -108,8 +108,16 @@ func doDownload(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg)
 	return ts.ReplyTo(tgmsg, replyMsg)
 }
 
-func getSavePath(mtype, filename string) string {
-	savePath := filepath.Join(TGCfg.SaveDir, mtype)
+// channelSaveDir 返回频道专属下载根目录，未配置时回落到全局 saveDir。
+func channelSaveDir(tgmsg *tg.TgMsg) string {
+	if tgmsg != nil && tgmsg.From != nil && tgmsg.From.SaveDir != "" {
+		return tgmsg.From.SaveDir
+	}
+	return TGCfg.SaveDir
+}
+
+func getSavePath(tgmsg *tg.TgMsg, mtype, filename string) string {
+	savePath := filepath.Join(channelSaveDir(tgmsg), mtype)
 	createDir(savePath)
 	return filepath.Join(savePath, filename)
 	// return uniquePath(savePath)
@@ -124,7 +132,7 @@ func downloadMagnet(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.Tg
 	replyMsg := fmt.Sprintf("正在下载%s:\n- 消息ID: %d", mtDesc, msgid)
 	ts.ReplyTo(tgmsg, replyMsg)
 
-	savePath := filepath.Join(TGCfg.SaveDir, subDir)
+	savePath := filepath.Join(channelSaveDir(tgmsg), subDir)
 	createDir(savePath)
 
 	err := exec.Command(TGCfg.Gopeed, "-C", "32", "-D", savePath, url).Run()
@@ -145,7 +153,7 @@ func writeNote(ts *tg.TgSuber, mtype tg.TgMsgClass, msgid int, tgmsg *tg.TgMsg) 
 	note := tgmsg.Text
 	logs.Debug().Int("msgid", msgid).Str("note", note).Str("from", tgmsg.From.Title).Msg("recv note")
 
-	savePath := filepath.Join(TGCfg.SaveDir, subDir)
+	savePath := filepath.Join(channelSaveDir(tgmsg), subDir)
 	createDir(savePath)
 	savePath = filepath.Join(savePath, strconv.FormatInt(int64(msgid), 10)+".md")
 

@@ -48,6 +48,7 @@ type SubChannelInfo struct {
 	AccessHash int64
 	Pts        int // 保存频道的 PTS（状态点）
 	SlashCmd   bool
+	SaveDir    string // 频道专属下载根目录，空表示使用全局 saveDir
 	chType     int
 }
 
@@ -56,6 +57,7 @@ type ChannelConfig struct {
 	Name     string `json:"name"`
 	ID       string `json:"id"`
 	SlashCmd bool   `json:"slashcmd"`
+	SaveDir  string `json:"saveDir,omitempty"` // 频道专属下载根目录，留空使用全局 saveDir
 }
 
 type TgSuber struct {

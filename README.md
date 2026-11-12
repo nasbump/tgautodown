@@ -51,7 +51,7 @@ usage: ./tgautodown options
   "gopeed": "/app/bin/gopeed",
   "httpaddr": ":2020",
   "channels": [
-    { "name": "频道1名称", "id": "频道1用户名或+邀请码", "slashcmd": true },
+    { "name": "频道1名称", "id": "频道1用户名或+邀请码", "slashcmd": true, "saveDir": "/mnt/hdd1/download" },
     { "name": "频道2名称", "id": "频道2用户名或+邀请码", "slashcmd": false }
   ],
   "proxy": "socks5://127.0.0.1:1080",
@@ -89,6 +89,7 @@ usage: ./tgautodown options
 | `name` | 可读的频道名称，用于日志与回执展示；留空时回退为 `id` |
 | `id` | 频道标识：公开频道/群组写用户名，私有频道/群组写 `+邀请码` |
 | `slashcmd` | 是否在该频道内响应斜杠命令（`/queue`、`/pause` 等），默认 `false` |
+| `saveDir` | 该频道的专属下载根目录；留空时使用全局 `saveDir` |
 
 
 ### 启动示例：
@@ -102,7 +103,7 @@ usage: ./tgautodown options
 ![web登陆](https://github.com/nasbump/tgautodown/blob/main/screenshots/web_login.jpg)
 
 ### 下载保存路径：
-视频、音乐、文档、图片、磁力链、笔记分别保存在`videos`,`music`,`documents`,`photos`,`bt`,`note`目录下。
+视频、音乐、文档、图片、磁力链、笔记分别保存在`videos`,`music`,`documents`,`photos`,`bt`,`note`目录下；根目录默认取全局 `saveDir`，频道配置了 `saveDir` 时保存在该频道自己的目录下。
 
 ### 下载队列与任务管理
 文件下载（视频、音乐、文档、图片）统一进入下载队列，每个任务都有唯一的递增任务ID：

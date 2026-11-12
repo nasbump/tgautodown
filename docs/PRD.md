@@ -239,7 +239,7 @@ flowchart TD
 
 **规则**：
 
-1. `channels` 为对象数组，每项含 `name`（可读名称，用于日志与回执展示；留空时回退为 `id`）、`id`（频道标识）、`slashcmd`（是否响应斜杠命令，默认 `false`）；`id` 与 `name` 自动去除首尾空格，`id` 为空时忽略该项。
+1. `channels` 为对象数组，每项含 `name`（可读名称，用于日志与回执展示；留空时回退为 `id`）、`id`（频道标识）、`slashcmd`（是否响应斜杠命令，默认 `false`）、`saveDir`（该来源专属下载根目录，留空时使用全局 `saveDir`）；`id`、`name`、`saveDir` 自动去除首尾空格（`saveDir` 另做路径清理），`id` 为空时忽略该项。
 2. `id` 不以 `+` 开头：按公开用户名解析，支持频道（Channel）与普通群（Chat）；解析结果为空时告警并跳过。
 3. `id` 以 `+` 开头：按私有邀请码解析，代码会自动去掉 `+`。
 4. 私有邀请解析结果：
@@ -247,7 +247,7 @@ flowchart TD
    - 未加入：仅告警，**不自动加入**，该订阅源不生效。
 5. 无法解析的订阅源记录告警并跳过，不影响其他订阅源。
 6. 订阅源集合为空时记录错误日志，`run` 正常返回，外层重连循环每 5 秒重建一次客户端并重复解析（未配置 `channels` 时也会持续重连）。
-7. 订阅关系仅存在于内存，key 为频道/群组 ID；`slashcmd` 随订阅关系一并缓存，运行期间不重新读取配置。
+7. 订阅关系仅存在于内存，key 为频道/群组 ID；`slashcmd` 与 `saveDir` 随订阅关系一并缓存，运行期间不重新读取配置。
 8. 订阅源解析仅在启动/重连时执行一次，运行期间修改配置不会生效。
 
 **验收**：
@@ -327,6 +327,8 @@ flowchart TD
 | 照片 | `{saveDir}/photos` |
 | 笔记 | `{saveDir}/note` |
 | BT | `{saveDir}/bt` |
+
+`{saveDir}` 解析顺序：该消息所属来源的 `channels[].saveDir`（非空时）→ 全局 `saveDir`。
 
 **验收**：
 
@@ -470,11 +472,11 @@ flowchart TD
 
 #### 10.4 `GET /tgad/channels/list`
 
-返回配置中的订阅源：`{"rtn":0,"msg":"succ","channels":[{"name":"...","id":"...","slashcmd":true}]}`；未配置时返回空数组。
+返回配置中的订阅源：`{"rtn":0,"msg":"succ","channels":[{"name":"...","id":"...","slashcmd":true,"saveDir":"/data/dl"}]}`（`saveDir` 未配置时省略）；未配置时返回空数组。
 
 #### 10.5 `POST /tgad/channels/modify`
 
-请求：订阅源对象数组，如 `[{"name":"频道A","id":"channelA","slashcmd":true},{"name":"私有","id":"+inviteCode","slashcmd":false}]`。**当前实现：整体替换配置中的 `channels` 并保存配置文件，但不更新运行时订阅，需重启/重连后生效**，始终返回成功。
+请求：订阅源对象数组，如 `[{"name":"频道A","id":"channelA","slashcmd":true,"saveDir":"/data/dl"},{"name":"私有","id":"+inviteCode","slashcmd":false}]`。**当前实现：整体替换配置中的 `channels` 并保存配置文件，但不更新运行时订阅，需重启/重连后生效**，始终返回成功。
 
 **通用约束**：
 
@@ -546,7 +548,7 @@ flowchart TD
 | BR-14 | 未完成任务（排队/下载中/暂停）落盘到 `{cfgdir}/tasks.json`，启动时自动恢复；成功/失败任务不落盘。 |
 | BR-08 | 文件引用过期自动刷新；刷新失败则按普通失败处理。 |
 | BR-09 | 网络/下载异常通过 5 秒重连循环自愈；唯一主动退出路径是会话被判定未授权（Fatal 后进程退出，依赖外部守护拉起）。 |
-| BR-10 | 下载文件按类型固定分目录，目录不存在时自动创建。 |
+| BR-10 | 下载文件按类型固定分目录，目录不存在时自动创建；根目录优先取消息所属来源的 `channels[].saveDir`，未配置时使用全局 `saveDir`。 |
 | BR-11 | 文档优先使用原始文件名，其次消息文本，最后订阅源名称（`channels[].name`，缺省为 `id`）+ 日期。 |
 | BR-12 | 文件名中的空格与非法字符统一替换为 `_`。 |
 
@@ -593,6 +595,7 @@ flowchart TD
 | `name` | 空（回退为 `id`） | 可读名称，用于日志与回执展示 |
 | `id` | — | 频道标识：公开频道/群组写用户名，私有频道/群组写 `+邀请码`；为空时忽略该项 |
 | `slashcmd` | `false` | 是否在该来源内响应斜杠命令 |
+| `saveDir` | 空（回退为全局 `saveDir`） | 该来源的专属下载根目录，其下仍按类型分 `videos`/`music`/`documents`/`photos`/`note`/`bt` |
 
 ### 8.3 容器部署
 
@@ -680,6 +683,7 @@ flowchart TD
 | AC-21 | `maxdl=2` 连发 5 个文件 | 同时最多 2 个下载，其余排队 |
 | AC-22 | 在 `channels` 中 `slashcmd=false` 的来源发送 `/queue` | 不触发命令，无回执，仅记录一条 debug 日志 |
 | AC-23 | `channels` 元素仅配置 `id`、不配置 `name` | 正常订阅，日志与回执展示使用 `id` 作为名称 |
+| AC-24 | 某来源配置 `saveDir=/mnt/hdd1/dl`，另一来源未配置 | 前者的文件落到 `/mnt/hdd1/dl/{类型}`，后者落到全局 `saveDir/{类型}` |
 
 ---
 
